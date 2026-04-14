@@ -7,14 +7,9 @@
  * ✅ Keeps this tab READ-ONLY (view statuses only) as you requested
  * ✅ Graceful states: loading / auth / error / empty
  *
- * Backend expected fields (from GET /parent/requests):
- * - currentTeacherName (or current_teacher_name depending on your normalizer)
- * - requestedTeacherName (or requested_teacher_name)
- *
- * NOTE:
- * - This UI assumes your `useParentRequests()` hook maps backend snake_case
- *   to camelCase fields used below. If your hook still returns old keys,
- *   update the hook normalizer accordingly (I can do that next).
+ * Backend fields are normalized by `useParentRequests()` and consumed here as:
+ * - currentTeacherName
+ * - requestedTeacherName
  */
 
 import { Suspense, useMemo } from "react";
@@ -117,19 +112,8 @@ function ParentRequestsPageContent() {
               const badgeClass =
                 statusColors[statusKey] || "bg-slate-100 text-slate-600";
 
-              // These are the NEW fields you added via backend:
-              // - currentTeacherName
-              // - requestedTeacherName
-              //
-              // If your hook returns snake_case, adjust the hook normalizer.
-              const currentTeacher = teacherLabel(
-                // @ts-expect-error: some projects normalize keys differently
-                r.currentTeacherName ?? r.current_teacher_name ?? null
-              );
-              const requestedTeacher = teacherLabel(
-                // @ts-expect-error: some projects normalize keys differently
-                r.requestedTeacherName ?? r.requested_teacher_name ?? null
-              );
+              const currentTeacher = teacherLabel(r.currentTeacherName ?? null);
+              const requestedTeacher = teacherLabel(r.requestedTeacherName ?? null);
 
               const hasTeacherDiff =
                 currentTeacher !== (lang === "ar" ? "غير محدد" : "Not set") &&

@@ -147,9 +147,14 @@ export type ParentRequest = {
   id: number;
   studentId: number;
   studentName: string;
+  subjectId?: number | null;
   subjectNameAr: string | null;
   subjectNameEn: string | null;
   teacherName: string | null;
+  currentTeacherId?: number | null;
+  currentTeacherName?: string | null;
+  requestedTeacherId?: number | null;
+  requestedTeacherName?: string | null;
   status: ParentRequestStatus;
   reason: string | null;
   createdAt: string;

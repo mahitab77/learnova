@@ -373,11 +373,10 @@ export function useParentAssignments() {
 }
 
 /* ===========================================================================
- * useParentRequests (UPDATED + BACKWARD COMPATIBLE)
+ * useParentRequests
  * - Session auth (credentials: include) via fetchJson
  * - Normalizes backend snake_case to frontend camelCase
- * - ✅ Keeps legacy `teacherName` so existing ParentRequest type still compiles
- * - ✅ Adds requested teacher fields for the new UI
+ * - Keeps legacy `teacherName` and adds explicit change-flow teacher fields
  * ========================================================================== */
 export function useParentRequests() {
   const [requests, setRequests] = useState<ParentRequest[]>([]);
@@ -437,13 +436,6 @@ export function useParentRequests() {
               ? r.requested_teacher_name
               : null;
 
-          // -------------------------------------------------------------------
-          // ✅ Backward compatibility:
-          // Your existing ParentRequest type REQUIRES `teacherName`.
-          // Historically it meant "the teacher on the request" (which is current).
-          // So we map:
-          //   teacherName = currentTeacherName
-          // -------------------------------------------------------------------
           const teacherName = currentTeacherName;
 
           return {
@@ -456,10 +448,8 @@ export function useParentRequests() {
             subjectNameAr: r.subject_name_ar,
             subjectNameEn: r.subject_name_en,
 
-            // ✅ Legacy field required by your current ParentRequest type
             teacherName,
 
-            // ✅ NEW fields (will be used by the updated Requests tab)
             currentTeacherId: r.current_teacher_id,
             currentTeacherName,
             requestedTeacherId: r.requested_teacher_id,
@@ -471,9 +461,7 @@ export function useParentRequests() {
           };
         });
 
-        // mapped already includes legacy `teacherName`,
-        // so it satisfies the current ParentRequest type
-        setRequests(mapped as ParentRequest[]);
+        setRequests(mapped);
       } catch (err: unknown) {
         if (err instanceof DOMException && err.name === "AbortError") return;
 
