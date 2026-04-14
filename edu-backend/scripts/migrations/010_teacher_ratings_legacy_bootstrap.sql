@@ -1,5 +1,7 @@
--- Migration 002: Create teacher_ratings table
--- Safe to run multiple times (CREATE TABLE IF NOT EXISTS).
+-- Migration 010: Legacy teacher_ratings bootstrap/reconcile script.
+-- NOTE:
+--   This was previously named 002_teacher_ratings.sql and was renumbered to
+--   keep migration prefixes strictly monotonic.
 --
 -- Design notes:
 --   - One rating per lesson session in v1 (enforced with a UNIQUE KEY on
@@ -15,22 +17,22 @@
 CREATE TABLE IF NOT EXISTS teacher_ratings (
   id                INT        NOT NULL AUTO_INCREMENT,
   lesson_session_id INT        NOT NULL
-                      COMMENT 'FK → lesson_sessions.id; exactly one rating per session',
+                     COMMENT 'FK → lesson_sessions.id; exactly one rating per session',
   teacher_id        INT        NOT NULL
-                      COMMENT 'FK → teachers.id; denormalized for fast aggregates',
+                     COMMENT 'FK → teachers.id; denormalized for fast aggregates',
   student_id        INT        NULL
-                      COMMENT 'FK → students.id; set for direct student ratings and parent child context',
+                     COMMENT 'FK → students.id; set for direct student ratings and parent child context',
   parent_id         INT        NULL
-                      COMMENT 'FK → parents.id; set only when a parent submitted the rating',
+                     COMMENT 'FK → parents.id; set only when a parent submitted the rating',
   stars             TINYINT    NOT NULL
-                      COMMENT '1..5 star rating (validated in application logic)',
+                     COMMENT '1..5 star rating (validated in application logic)',
   comment           TEXT       NULL
-                      COMMENT 'Optional short written review',
+                     COMMENT 'Optional short written review',
   is_hidden         TINYINT(1) NOT NULL DEFAULT 0
-                      COMMENT 'Future moderation flag; hidden ratings are excluded from aggregates',
+                     COMMENT 'Future moderation flag; hidden ratings are excluded from aggregates',
   created_at        DATETIME   NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at        DATETIME   NOT NULL DEFAULT CURRENT_TIMESTAMP
-                                    ON UPDATE CURRENT_TIMESTAMP,
+                                   ON UPDATE CURRENT_TIMESTAMP,
 
   PRIMARY KEY (id),
 

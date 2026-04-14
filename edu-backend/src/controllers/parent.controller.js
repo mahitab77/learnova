@@ -912,7 +912,6 @@ export const createParentRequest = async (req, res) => {
     console.error("createParentRequest error:", {
       error: err,
       userId: user?.id,
-      body: req.body,
     });
     return res.status(500).json({
       success: false,

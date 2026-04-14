@@ -6,3 +6,8 @@
 
 # Keep safe templates in git
 !.env.example
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx

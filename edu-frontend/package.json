@@ -6,7 +6,11 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test": "node -e \"console.log('No frontend tests configured yet')\""
+  },
+  "engines": {
+    "node": ">=20 <21"
   },
   "dependencies": {
     "lucide-react": "^0.552.0",

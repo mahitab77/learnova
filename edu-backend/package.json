@@ -8,7 +8,11 @@
     "dev": "node ./scripts/start-mysql-and-dev.js",
     "dev:raw": "nodemon server.js",
     "start": "node server.js",
-    "test": "node --test --test-concurrency=1 --experimental-test-isolation=none test/academicScope.test.js test/teacherSelection.service.test.js test/parentSwitch.cleanup.test.js test/contracts.api.test.js"
+    "lint": "node ./scripts/lint-backend.js",
+    "build": "node ./scripts/lint-backend.js",
+    "migrations:validate": "node ./scripts/validate-migrations.js",
+    "test": "node --test --test-concurrency=1 --experimental-test-isolation=none test/academicScope.test.js test/teacherSelection.service.test.js test/parentSwitch.cleanup.test.js test/contracts.api.test.js",
+    "test:coverage": "c8 --check-coverage --lines 70 --functions 70 --branches 60 --statements 70 node --test --test-concurrency=1 --experimental-test-isolation=none test/academicScope.test.js test/teacherSelection.service.test.js test/parentSwitch.cleanup.test.js test/contracts.api.test.js"
   },
   "keywords": [
     "node",
@@ -19,6 +23,9 @@
   ],
   "author": "",
   "license": "ISC",
+  "engines": {
+    "node": ">=20 <21"
+  },
   "dependencies": {
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",
@@ -31,6 +38,7 @@
     "nodemailer": "^7.0.10"
   },
   "devDependencies": {
+    "c8": "^10.1.2",
     "nodemon": "^3.1.10",
     "supertest": "^7.2.2"
   }
