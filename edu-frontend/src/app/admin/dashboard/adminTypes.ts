@@ -107,6 +107,7 @@ export type ParentRequestRow = {
 
   current_teacher_id: number | null;
   current_teacher_name: string | null;
+  request_type?: "parent" | "lesson";
 };
 
 // ============================================================================

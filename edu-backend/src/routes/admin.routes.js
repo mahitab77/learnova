@@ -9,6 +9,13 @@ import { validateRequest } from "../middlewares/requestValidation.js";
 import {
   validateAdminApproveLesson,
   validateAdminCancelLesson,
+  validateAdminIdParam,
+  validateAdminTeacherAssign,
+  validateAdminUserActivation,
+  validateAdminCreateParentStudentLink,
+  validateAdminReassignTeacher,
+  validateAdminCreateSchedule,
+  validateAdminUpdateSchedule,
 } from "../validation/highRiskMutations.js";
 
 import {
@@ -85,6 +92,14 @@ import {
   // SESSION MEETING INFO
   updateSessionMeetingAdmin,
 } from "../controllers/admin.controller.js";
+import {
+  confirmPayment,
+  failPayment,
+} from "../controllers/payment.controller.js";
+import {
+  approveRefund,
+  rejectRefund,
+} from "../controllers/refund.controller.js";
 
 const router = Router();
 
@@ -107,8 +122,8 @@ router.use(requireAdminSession);
 
 router.get("/subjects", getAllSubjectsAdmin);
 router.post("/subjects", createSubjectAdmin);
-router.put("/subjects/:id", updateSubjectAdmin);
-router.delete("/subjects/:id", deleteSubjectAdmin);
+router.put("/subjects/:id", validateRequest(validateAdminIdParam), updateSubjectAdmin);
+router.delete("/subjects/:id", validateRequest(validateAdminIdParam), deleteSubjectAdmin);
 
 /* ============================================================================ */
 /* TEACHERS (basic CRUD + subjects)                                             */
@@ -116,25 +131,25 @@ router.delete("/subjects/:id", deleteSubjectAdmin);
 
 router.get("/teachers", getAllTeachersAdmin);
 router.post("/teachers", createTeacherAdmin);
-router.post("/teachers/:teacherId/assign", assignTeacherToSubjectAdmin);
-router.put("/teachers/:id", updateTeacherAdmin);
+router.post("/teachers/:teacherId/assign", validateRequest(validateAdminTeacherAssign), assignTeacherToSubjectAdmin);
+router.put("/teachers/:id", validateRequest(validateAdminIdParam), updateTeacherAdmin);
 
 /* ============================================================================ */
 /* TEACHER ONBOARDING / APPROVAL                                                */
 /* ============================================================================ */
 
 router.get("/teachers/pending", getPendingTeachersAdmin);
-router.post("/teachers/:id/approve", approveTeacherAdmin);
-router.post("/teachers/:id/reject", rejectTeacherAdmin);
-router.put("/teachers/:id/capacity", updateTeacherCapacityAdmin);
+router.post("/teachers/:id/approve", validateRequest(validateAdminIdParam), approveTeacherAdmin);
+router.post("/teachers/:id/reject", validateRequest(validateAdminIdParam), rejectTeacherAdmin);
+router.put("/teachers/:id/capacity", validateRequest(validateAdminIdParam), updateTeacherCapacityAdmin);
 
 /* ============================================================================ */
 /* PARENT CHANGE REQUESTS                                                       */
 /* ============================================================================ */
 
 router.get("/parent-requests", getParentRequestsAdmin);
-router.post("/parent-requests/:id/approve", approveParentRequestAdmin);
-router.post("/parent-requests/:id/reject", rejectParentRequestAdmin);
+router.post("/parent-requests/:id/approve", validateRequest(validateAdminIdParam), approveParentRequestAdmin);
+router.post("/parent-requests/:id/reject", validateRequest(validateAdminIdParam), rejectParentRequestAdmin);
 
 /* ============================================================================ */
 /* USERS (Students & Parents)                                                   */
@@ -142,31 +157,31 @@ router.post("/parent-requests/:id/reject", rejectParentRequestAdmin);
 
 router.get("/students", getAdminStudents);
 router.get("/parents", getAdminParents);
-router.put("/users/:id/activate", activateUserAdmin);
+router.put("/users/:id/activate", validateRequest(validateAdminUserActivation), activateUserAdmin);
 
 /* ============================================================================ */
 /* PARENT ↔ STUDENT LINKS                                                       */
 /* ============================================================================ */
 
 router.get("/parent-student-links", listParentStudentLinksAdmin);
-router.post("/parent-student-links", createParentStudentLinkAdmin);
-router.delete("/parent-student-links/:id", deleteParentStudentLinkAdmin);
+router.post("/parent-student-links", validateRequest(validateAdminCreateParentStudentLink), createParentStudentLinkAdmin);
+router.delete("/parent-student-links/:id", validateRequest(validateAdminIdParam), deleteParentStudentLinkAdmin);
 
 /* ============================================================================ */
 /* STUDENT–TEACHER ASSIGNMENTS                                                  */
 /* ============================================================================ */
 
 router.get("/teacher-assignments", getTeacherAssignmentsAdmin);
-router.post("/teacher-assignments/reassign", reassignStudentTeacherAdmin);
+router.post("/teacher-assignments/reassign", validateRequest(validateAdminReassignTeacher), reassignStudentTeacherAdmin);
 
 /* ============================================================================ */
 /* TIMETABLE / SCHEDULES                                                        */
 /* ============================================================================ */
 
 router.get("/schedules", getTeacherSchedulesAdmin);
-router.post("/schedules", createTeacherScheduleAdmin);
-router.put("/schedules/:id", updateTeacherScheduleAdmin);
-router.delete("/schedules/:id", deleteTeacherScheduleAdmin);
+router.post("/schedules", validateRequest(validateAdminCreateSchedule), createTeacherScheduleAdmin);
+router.put("/schedules/:id", validateRequest(validateAdminUpdateSchedule), updateTeacherScheduleAdmin);
+router.delete("/schedules/:id", validateRequest(validateAdminIdParam), deleteTeacherScheduleAdmin);
 
 // Sessions list (existing)
 router.get("/lesson-sessions", getAdminLessonSessionsAdmin);
@@ -227,5 +242,13 @@ router.patch("/lesson-sessions/:id/meeting", updateSessionMeetingAdmin);
 
 router.get("/moderators", getModeratorsAdmin);
 router.post("/moderators", createModeratorAdmin);
+
+/* ============================================================================ */
+/* BILLING GOVERNANCE (ADMIN MUTATIONS)                                         */
+/* ============================================================================ */
+router.post("/payments/:paymentId/confirm", confirmPayment);
+router.post("/payments/:paymentId/fail", failPayment);
+router.post("/payments/:paymentId/refund/approve", approveRefund);
+router.post("/payments/:paymentId/refund/reject", rejectRefund);
 
 export default router;

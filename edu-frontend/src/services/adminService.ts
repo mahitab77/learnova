@@ -46,6 +46,10 @@ type ApiResponse<T> = {
   data?: T;
 };
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
 // ---------------------------------------------------------------------------
 // "edu-user" types (UI display only; not used for auth)
 // ---------------------------------------------------------------------------
@@ -178,17 +182,16 @@ function buildHeaders(options: ApiFetchOptions): HeadersInit | undefined {
  * For endpoints that return: { success:true, data: T }
  */
 async function unwrapData<T>(path: string, options: ApiFetchOptions = {}): Promise<T> {
-  const res = await apiFetch<ApiResponse<T>>(path, {
+  const raw = await apiFetch<unknown>(path, {
     ...options,
     headers: buildHeaders(options),
   });
-
-  if (!res.success) {
-    throw new Error(res.message || "Server error.");
+  if (!isRecord(raw) || raw.success !== true || !("data" in raw)) {
+    throw new Error("Invalid API response shape.");
   }
-
+  const res = raw as ApiResponse<T>;
   if (typeof res.data === "undefined") {
-    throw new Error(res.message || "Server error (missing data).");
+    throw new Error("Server error (missing data).");
   }
 
   return res.data;
@@ -199,11 +202,14 @@ async function unwrapData<T>(path: string, options: ApiFetchOptions = {}): Promi
  * For endpoints that return: { success:true } (no data)
  */
 async function unwrapOk(path: string, options: ApiFetchOptions = {}): Promise<void> {
-  const res = await apiFetch<ApiResponse<unknown>>(path, {
+  const raw = await apiFetch<unknown>(path, {
     ...options,
     headers: buildHeaders(options),
   });
-
+  if (!isRecord(raw) || typeof raw.success !== "boolean") {
+    throw new Error("Invalid API response shape.");
+  }
+  const res = raw as ApiResponse<unknown>;
   if (!res.success) {
     throw new Error(res.message || "Server error.");
   }
@@ -450,6 +456,20 @@ async function getPendingLessonRequests(): Promise<unknown[]> {
   return unwrapData("/admin/lesson-requests/pending");
 }
 
+async function approveLessonRequest(id: number): Promise<void> {
+  await unwrapOk(`/admin/lesson-requests/${id}/approve`, {
+    method: "POST",
+    json: {},
+  });
+}
+
+async function cancelLessonSession(id: number, reason?: string): Promise<void> {
+  await unwrapOk(`/admin/lessons/${id}/cancel`, {
+    method: "POST",
+    json: { reason: reason ?? null },
+  });
+}
+
 // ============================================================================
 // ANNOUNCEMENTS
 // ============================================================================
@@ -569,6 +589,8 @@ const adminService = {
   // lesson sessions / requests
   getAdminLessonSessions,
   getPendingLessonRequests,
+  approveLessonRequest,
+  cancelLessonSession,
 
   // announcements
   getAnnouncements,

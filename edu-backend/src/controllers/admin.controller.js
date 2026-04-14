@@ -2,6 +2,7 @@
 import pool from "../db.js";
 import { upsertTeacherSelection } from "../services/teacherSelection.service.js";
 import { assertTeacherEligibleForSubjectScope } from "../services/teacherDiscovery.service.js";
+import { teacherHasLiveOfferingForScope } from "../utils/academicScope.js";
 /* ============================================================================
  * ANNOUNCEMENTS / NOTIFICATIONS (ADMIN)
  * ============================================================================*/ 
@@ -492,13 +493,14 @@ export const updateSubjectAdmin = async (req, res) => {
 export const deleteSubjectAdmin = async (req, res) => {
   const { id } = req.params;
   try {
-    const [result] = await pool.query("DELETE FROM subjects WHERE id = ?", [
-      id,
-    ]);
+    const [result] = await pool.query(
+      "UPDATE subjects SET is_active = 0 WHERE id = ?",
+      [id]
+    );
     if (result.affectedRows === 0) {
       return res.status(404).json({ success: false, message: "Not found." });
     }
-    return res.json({ success: true, message: "Subject deleted." });
+    return res.json({ success: true, message: "Subject deactivated." });
   } catch (err) {
     console.error("deleteSubjectAdmin error:", err);
     return res.status(500).json({ success: false, message: "Server error." });
@@ -551,31 +553,12 @@ export const getAllTeachersAdmin = async (req, res) => {
  * - Create a new teacher (basic profile).
  */
 export const createTeacherAdmin = async (req, res) => {
-  const { name, bio_short, gender, photo_url, is_active = 1 } = req.body;
-  if (!name) {
-    return res
-      .status(400)
-      .json({ success: false, message: "Name is required." });
-  }
-
-  try {
-    const [result] = await pool.query(
-      `
-      INSERT INTO teachers (name, bio_short, gender, photo_url, is_active)
-      VALUES (?, ?, ?, ?, ?)
-      `,
-      [name, bio_short || null, gender || null, photo_url || null, is_active]
-    );
-
-    return res.status(201).json({
-      success: true,
-      message: "Teacher created.",
-      data: { id: result.insertId, name },
-    });
-  } catch (err) {
-    console.error("createTeacherAdmin error:", err);
-    return res.status(500).json({ success: false, message: "Server error." });
-  }
+  return res.status(400).json({
+    success: false,
+    code: "TEACHER_IDENTITY_REQUIRED",
+    message:
+      "Direct teacher profile creation is disabled. Use teacher registration to create linked users+teachers identities.",
+  });
 };
 
 /**
@@ -730,43 +713,53 @@ export const approveParentRequestAdmin = async (req, res) => {
     }
 
     const reqRow = rows[0];
-
-    // 2) if admin provided a new teacher, update student's selection
-    if (newTeacherId) {
-      if (!normalizedNewTeacherId) {
-        await conn.rollback();
-        txStarted = false;
-        return res.status(400).json({
-          success: false,
-          message: "newTeacherId must be a valid positive integer.",
-        });
-      }
-
-      const eligibility = await assertTeacherEligibleForSubjectScope(
-        normalizedNewTeacherId,
-        reqRow.student_id,
-        reqRow.subject_id,
-        {
-          executor: conn,
-          actorType: "student",
-        }
-      );
-      if (!eligibility.ok) {
-        await conn.rollback();
-        txStarted = false;
-        return res.status(eligibility.status).json({
-          success: false,
-          message: eligibility.message,
-        });
-      }
-
-      await upsertTeacherSelection(conn, {
-        studentId: reqRow.student_id,
-        subjectId: reqRow.subject_id,
-        teacherId: normalizedNewTeacherId,
-        selectedBy: "admin",
+    if (String(reqRow.status).toLowerCase() !== "pending") {
+      await conn.rollback();
+      txStarted = false;
+      return res.status(409).json({
+        success: false,
+        code: "REQUEST_NOT_PENDING",
+        message: "Only pending requests can be approved.",
       });
     }
+
+    const fallbackTeacherId = toPositiveInt(reqRow.requested_teacher_id);
+    const effectiveTeacherId = normalizedNewTeacherId ?? fallbackTeacherId;
+    if (!effectiveTeacherId) {
+      await conn.rollback();
+      txStarted = false;
+      return res.status(400).json({
+        success: false,
+        code: "REQUESTED_TEACHER_REQUIRED",
+        message:
+          "Approval requires a requested teacher. Provide newTeacherId or ensure request contains requested_teacher_id.",
+      });
+    }
+
+    const eligibility = await assertTeacherEligibleForSubjectScope(
+      effectiveTeacherId,
+      reqRow.student_id,
+      reqRow.subject_id,
+      {
+        executor: conn,
+        actorType: "student",
+      }
+    );
+    if (!eligibility.ok) {
+      await conn.rollback();
+      txStarted = false;
+      return res.status(eligibility.status).json({
+        success: false,
+        message: eligibility.message,
+      });
+    }
+
+    await upsertTeacherSelection(conn, {
+      studentId: reqRow.student_id,
+      subjectId: reqRow.subject_id,
+      teacherId: effectiveTeacherId,
+      selectedBy: "admin",
+    });
 
     // 3) mark request as approved
     await conn.query(
@@ -776,6 +769,7 @@ export const approveParentRequestAdmin = async (req, res) => {
           admin_id = ?,
           processed_at = CURRENT_TIMESTAMP
       WHERE id = ?
+        AND status = 'pending'
       `,
       [adminUser.id, id]
     );
@@ -810,11 +804,19 @@ export const rejectParentRequestAdmin = async (req, res) => {
 
   try {
     const [rows] = await pool.query(
-      "SELECT id FROM parent_change_requests WHERE id = ? LIMIT 1",
+      "SELECT id, status FROM parent_change_requests WHERE id = ? LIMIT 1",
       [id]
     );
     if (rows.length === 0) {
       return res.status(404).json({ success: false, message: "Not found." });
+    }
+
+    if (String(rows[0].status).toLowerCase() !== "pending") {
+      return res.status(409).json({
+        success: false,
+        code: "REQUEST_NOT_PENDING",
+        message: "Only pending requests can be rejected.",
+      });
     }
 
     await pool.query(
@@ -824,6 +826,7 @@ export const rejectParentRequestAdmin = async (req, res) => {
           admin_id = ?,
           processed_at = CURRENT_TIMESTAMP
       WHERE id = ?
+        AND status = 'pending'
       `,
       [adminUser.id, id]
     );
@@ -933,8 +936,30 @@ export const activateUserAdmin = async (req, res) => {
     newStatus = 1; // default: activate
   }
 
+  let conn;
+  let txStarted = false;
   try {
-    const [result] = await pool.query(
+    conn = await pool.getConnection();
+    await conn.beginTransaction();
+    txStarted = true;
+
+    const [[targetUser]] = await conn.query(
+      `
+      SELECT id, role
+      FROM users
+      WHERE id = ?
+      LIMIT 1
+      FOR UPDATE
+      `,
+      [id]
+    );
+    if (!targetUser) {
+      await conn.rollback();
+      txStarted = false;
+      return res.status(404).json({ success: false, message: "User not found." });
+    }
+
+    const [result] = await conn.query(
       `
       UPDATE users
       SET is_active = ?
@@ -944,18 +969,39 @@ export const activateUserAdmin = async (req, res) => {
     );
 
     if (result.affectedRows === 0) {
-      return res
-        .status(404)
-        .json({ success: false, message: "User not found." });
+      await conn.rollback();
+      txStarted = false;
+      return res.status(404).json({ success: false, message: "User not found." });
     }
+
+    if (String(targetUser.role).toLowerCase() === "teacher") {
+      await conn.query(
+        `
+        UPDATE teachers
+        SET is_active = ?
+        WHERE user_id = ?
+        `,
+        [newStatus, id]
+      );
+    }
+
+    await conn.commit();
+    txStarted = false;
 
     return res.json({
       success: true,
       message: newStatus ? "User activated." : "User deactivated.",
     });
   } catch (err) {
+    if (txStarted && conn) {
+      try {
+        await conn.rollback();
+      } catch {}
+    }
     console.error("activateUserAdmin error:", err);
     return res.status(500).json({ success: false, message: "Server error." });
+  } finally {
+    if (conn) conn.release();
   }
 };
 
@@ -1222,6 +1268,14 @@ export const approveTeacherAdmin = async (req, res) => {
 
     const teacher = rows[0];
     const userId = teacher.user_id;
+    if (String(teacher.status).toLowerCase() !== "pending_review") {
+      await conn.rollback();
+      return res.status(409).json({
+        success: false,
+        code: "TEACHER_NOT_PENDING",
+        message: "Only pending_review teachers can be approved.",
+      });
+    }
 
     // 2) Update teacher row → approved + active + notes
     const [teacherResult] = await conn.query(
@@ -1300,10 +1354,13 @@ export const rejectTeacherAdmin = async (req, res) => {
   const { id } = req.params;
   const { approval_notes } = req.body || {};
 
+  let conn;
+  let txStarted = false;
   try {
-    const [rows] = await pool.query(
+    conn = await pool.getConnection();
+    const [rows] = await conn.query(
       `
-      SELECT id, status FROM teachers
+      SELECT id, user_id, status FROM teachers
       WHERE id = ? LIMIT 1
       `,
       [id]
@@ -1312,7 +1369,19 @@ export const rejectTeacherAdmin = async (req, res) => {
       return res.status(404).json({ success: false, message: "Teacher not found." });
     }
 
-    const [result] = await pool.query(
+    const teacher = rows[0];
+    if (String(teacher.status).toLowerCase() !== "pending_review") {
+      return res.status(409).json({
+        success: false,
+        code: "TEACHER_NOT_PENDING",
+        message: "Only pending_review teachers can be rejected.",
+      });
+    }
+
+    await conn.beginTransaction();
+    txStarted = true;
+
+    const [result] = await conn.query(
       `
       UPDATE teachers
       SET status = 'rejected',
@@ -1327,13 +1396,32 @@ export const rejectTeacherAdmin = async (req, res) => {
       return res.status(400).json({ success: false, message: "Teacher not updated." });
     }
 
+    await conn.query(
+      `
+      UPDATE users
+      SET is_active = 0
+      WHERE id = ?
+      `,
+      [teacher.user_id]
+    );
+
+    await conn.commit();
+    txStarted = false;
+
     return res.json({
       success: true,
       message: "Teacher rejected.",
     });
   } catch (err) {
+    if (txStarted && conn) {
+      try {
+        await conn.rollback();
+      } catch {}
+    }
     console.error("rejectTeacherAdmin error:", err);
     return res.status(500).json({ success: false, message: "Server error." });
+  } finally {
+    if (conn) conn.release();
   }
 };
 /* ============================================================================
@@ -1624,7 +1712,7 @@ export const deleteTeacherScheduleAdmin = async (req, res) => {
 
   try {
     const [result] = await pool.query(
-      "DELETE FROM teacher_schedules WHERE id = ?",
+      "UPDATE teacher_schedules SET is_active = 0 WHERE id = ?",
       [id]
     );
 
@@ -1636,7 +1724,7 @@ export const deleteTeacherScheduleAdmin = async (req, res) => {
 
     return res.json({
       success: true,
-      message: "Schedule deleted.",
+      message: "Schedule deactivated.",
     });
   } catch (err) {
     console.error("deleteTeacherScheduleAdmin error:", err);
@@ -1901,6 +1989,52 @@ export const adminCreateLessonSession = async (req, res) => {
     conn = await pool.getConnection();
     await conn.beginTransaction();
 
+    const [[futureRow]] = await conn.query(`SELECT (? > NOW()) AS is_future`, [starts_at]);
+    if (!Number(futureRow?.is_future)) {
+      await conn.rollback();
+      return res.status(400).json({
+        success: false,
+        message: "starts_at must be in the future.",
+      });
+    }
+
+    const [[teacherRow]] = await conn.query(
+      `
+      SELECT id
+      FROM teachers
+      WHERE id = ?
+        AND status = 'approved'
+        AND is_active = 1
+      LIMIT 1
+      FOR UPDATE
+      `,
+      [teacher_id]
+    );
+    if (!teacherRow) {
+      await conn.rollback();
+      return res.status(400).json({
+        success: false,
+        message: "Teacher must be approved and active.",
+      });
+    }
+
+    const hasOffering = await teacherHasLiveOfferingForScope(
+      Number(teacher_id),
+      Number(subject_id),
+      Number(system_id),
+      Number(stage_id),
+      grade_level_id == null ? null : Number(grade_level_id),
+      conn
+    );
+    if (!hasOffering) {
+      await conn.rollback();
+      return res.status(400).json({
+        success: false,
+        message:
+          "Teacher does not have a live offering for this subject and academic scope.",
+      });
+    }
+
     let finalScheduleId = schedule_id || null;
     let finalExceptionId = null;
 
@@ -1945,6 +2079,26 @@ export const adminCreateLessonSession = async (req, res) => {
           message: "Invalid schedule_id for this teacher.",
         });
       }
+    }
+
+    const [[teacherConflict]] = await conn.query(
+      `
+      SELECT 1
+      FROM lesson_sessions
+      WHERE teacher_id = ?
+        AND status IN ('pending','scheduled','approved')
+        AND starts_at < ?
+        AND ends_at   > ?
+      LIMIT 1
+      `,
+      [teacher_id, ends_at, starts_at]
+    );
+    if (teacherConflict) {
+      await conn.rollback();
+      return res.status(400).json({
+        success: false,
+        message: "Teacher has a conflicting lesson at this time.",
+      });
     }
 
     const [r] = await conn.query(
@@ -2025,10 +2179,18 @@ export const adminGetTeacherSchedulePanel = async (req, res) => {
       `
       SELECT
         tss.id, tss.schedule_id,
-        tss.subject_id, s.name AS subject_name,
-        tss.system_id, es.name AS system_name,
-        tss.stage_id, gs.name AS stage_name,
-        tss.grade_level_id, gl.name AS grade_level_name,
+        tss.subject_id,
+        s.name_en AS subject_name_en,
+        s.name_ar AS subject_name_ar,
+        tss.system_id,
+        es.name_en AS system_name_en,
+        es.name_ar AS system_name_ar,
+        tss.stage_id,
+        gs.name_en AS stage_name_en,
+        gs.name_ar AS stage_name_ar,
+        tss.grade_level_id,
+        gl.name_en AS grade_level_name_en,
+        gl.name_ar AS grade_level_name_ar,
         tss.is_active
       FROM teacher_schedule_subjects tss
       JOIN teacher_schedules ts ON ts.id = tss.schedule_id
@@ -2193,6 +2355,39 @@ export const approveLessonRequestAdmin = async (req, res) => {
       });
     }
 
+    const [[studentConflict]] = await conn.query(
+      `
+      SELECT 1
+      FROM lesson_sessions
+      WHERE student_id = ?
+        AND status IN ('pending','scheduled','approved')
+        AND id <> ?
+        AND starts_at < ?
+        AND ends_at   > ?
+      LIMIT 1
+      `,
+      [session.student_id, sessionId, session.ends_at, session.starts_at]
+    );
+    if (studentConflict) {
+      await conn.rollback();
+      return res.status(400).json({
+        success: false,
+        message: "Student has a conflicting session at this time.",
+      });
+    }
+
+    const [[futureRow]] = await conn.query(
+      `SELECT (? > NOW()) AS is_future`,
+      [session.starts_at]
+    );
+    if (!Number(futureRow?.is_future)) {
+      await conn.rollback();
+      return res.status(400).json({
+        success: false,
+        message: "Pending lesson request is no longer in the future.",
+      });
+    }
+
     // Approve
     await conn.query(
       `
@@ -2248,6 +2443,7 @@ export const cancelLessonSessionAdmin = async (req, res) => {
       SET status = 'cancelled',
           cancelled_by = 'admin',
           cancel_reason = COALESCE(?, cancel_reason),
+          cancelled_at = NOW(),
           updated_by_user_id = ?
       WHERE id = ?
         AND status IN ('pending','scheduled','approved')

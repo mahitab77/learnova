@@ -16,6 +16,7 @@ import {
   requireUser as baseRequireUser,
   requireSessionUser as baseRequireSessionUser,
 } from "./auth.js";
+import pool from "../db.js";
 
 const NODE_ENV = process.env.NODE_ENV || "development";
 const isProd = NODE_ENV === "production";
@@ -28,7 +29,7 @@ const isProd = NODE_ENV === "production";
  * Internal: Check if user has admin role
  * Assumes req.user is already attached by auth middleware
  */
-const requireAdminCheck = (req, res, next) => {
+const requireAdminCheck = async (req, res, next) => {
   if (!req.user?.id) {
     return res.status(401).json({
       success: false,
@@ -38,17 +39,37 @@ const requireAdminCheck = (req, res, next) => {
     });
   }
 
-  const role = typeof req.user.role === "string" ? req.user.role.toLowerCase() : "";
-  if (role !== "admin") {
-    return res.status(403).json({
+  try {
+    const [[row]] = await pool.query(
+      `
+      SELECT role, is_active
+      FROM users
+      WHERE id = ?
+      LIMIT 1
+      `,
+      [req.user.id]
+    );
+
+    const role = typeof row?.role === "string" ? row.role.toLowerCase() : "";
+    if (!row || Number(row.is_active) !== 1 || role !== "admin") {
+      return res.status(403).json({
+        success: false,
+        source: "admin.requireAdminCheck",
+        code: "ADMIN_FORBIDDEN",
+        message: "Admin access only.",
+      });
+    }
+
+    req.user.role = "admin";
+    return next();
+  } catch (error) {
+    return res.status(500).json({
       success: false,
       source: "admin.requireAdminCheck",
-      code: "ADMIN_FORBIDDEN",
-      message: "Admin access only.",
+      code: "ADMIN_ROLE_VALIDATION_FAILED",
+      message: "Unable to validate admin access.",
     });
   }
-
-  return next();
 };
 
 // ============================================================================

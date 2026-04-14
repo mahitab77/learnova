@@ -288,3 +288,92 @@ export function validateAdminCancelLesson({ params, body }) {
   }
   return { errors };
 }
+
+export function validateAdminIdParam({ params }) {
+  const errors = [];
+  requirePositiveId(params.id, "id", errors);
+  return { errors };
+}
+
+export function validateAdminTeacherAssign({ params, body }) {
+  const errors = [];
+  requirePositiveId(params.teacherId, "teacherId", errors);
+  requirePositiveId(body.subjectId, "subjectId", errors);
+  if (body.priority != null && !Number.isFinite(Number(body.priority))) {
+    errors.push({ field: "priority", message: "priority must be a number when provided." });
+  }
+  return { errors };
+}
+
+export function validateAdminUserActivation({ params, body }) {
+  const errors = [];
+  requirePositiveId(params.id, "id", errors);
+  if (body.is_active != null && ![0, 1, true, false].includes(body.is_active)) {
+    errors.push({
+      field: "is_active",
+      message: "is_active must be one of: 0, 1, true, false.",
+    });
+  }
+  return { errors };
+}
+
+export function validateAdminCreateParentStudentLink({ body }) {
+  const errors = [];
+  requirePositiveId(body.parent_id, "parent_id", errors);
+  requirePositiveId(body.student_id, "student_id", errors);
+  if (
+    body.relationship != null &&
+    !["mother", "father", "guardian"].includes(String(body.relationship))
+  ) {
+    errors.push({
+      field: "relationship",
+      message: "relationship must be one of: mother, father, guardian.",
+    });
+  }
+  return { errors };
+}
+
+export function validateAdminReassignTeacher({ body }) {
+  const errors = [];
+  requirePositiveId(body.student_id, "student_id", errors);
+  requirePositiveId(body.subject_id, "subject_id", errors);
+  requirePositiveId(body.to_teacher_id, "to_teacher_id", errors);
+  return { errors };
+}
+
+export function validateAdminCreateSchedule({ body }) {
+  const errors = [];
+  requirePositiveId(body.teacher_id, "teacher_id", errors);
+  requirePositiveId(body.weekday, "weekday", errors);
+  if (!hasText(body.start_time)) {
+    errors.push({ field: "start_time", message: "start_time is required." });
+  }
+  if (!hasText(body.end_time)) {
+    errors.push({ field: "end_time", message: "end_time is required." });
+  }
+  return { errors };
+}
+
+export function validateAdminUpdateSchedule({ params, body }) {
+  const errors = [];
+  requirePositiveId(params.id, "id", errors);
+  if (
+    body.weekday != null &&
+    toPositiveInt(body.weekday) == null
+  ) {
+    errors.push({ field: "weekday", message: "weekday must be a positive integer." });
+  }
+  if (
+    body.start_time != null &&
+    !hasText(body.start_time)
+  ) {
+    errors.push({ field: "start_time", message: "start_time must be a non-empty string." });
+  }
+  if (
+    body.end_time != null &&
+    !hasText(body.end_time)
+  ) {
+    errors.push({ field: "end_time", message: "end_time must be a non-empty string." });
+  }
+  return { errors };
+}

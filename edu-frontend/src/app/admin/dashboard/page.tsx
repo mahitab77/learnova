@@ -473,8 +473,12 @@ function AdminDashboardPageContent() {
                   requestsError={d.requestsError}
                   approvingId={d.approvingId}
                   rejectingId={d.rejectingId}
+                  approvingLessonId={d.approvingLessonId}
+                  cancellingLessonId={d.cancellingLessonId}
                   handleApproveRequest={d.handleApproveRequest}
                   handleRejectRequest={d.handleRejectRequest}
+                  handleApproveLessonRequest={d.handleApproveLessonRequest}
+                  handleCancelLessonSession={d.handleCancelLessonSession}
                 />
               )}
 

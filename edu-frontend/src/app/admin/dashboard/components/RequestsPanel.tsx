@@ -31,8 +31,12 @@ export type RequestsPanelProps = {
   requestsError: string | null;
   approvingId: number | null;
   rejectingId: number | null;
+  approvingLessonId: number | null;
+  cancellingLessonId: number | null;
   handleApproveRequest: (id: number) => void;
   handleRejectRequest: (id: number) => void;
+  handleApproveLessonRequest: (id: number) => void;
+  handleCancelLessonSession: (id: number, reason?: string) => void;
 };
 
 type RequestStatusFilter = "all" | "pending" | "approved" | "rejected";
@@ -53,8 +57,12 @@ export function RequestsPanel({
   requestsError,
   approvingId,
   rejectingId,
+  approvingLessonId,
+  cancellingLessonId,
   handleApproveRequest,
   handleRejectRequest,
+  handleApproveLessonRequest,
+  handleCancelLessonSession,
 }: RequestsPanelProps) {
   const dir = lang === "ar" ? "rtl" : "ltr";
 
@@ -262,9 +270,34 @@ export function RequestsPanel({
 
                     <td className="px-3 py-2">
                       {isLesson ? (
-                        <span className="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] border bg-slate-50 text-slate-600 border-slate-200">
-                          {lang === "ar" ? "للمراجعة فقط" : "Read-only"}
-                        </span>
+                        <div className="flex gap-1">
+                          <button
+                            onClick={() => handleApproveLessonRequest(req.id)}
+                            disabled={approvingLessonId === req.id}
+                            className="px-2 py-1 text-[11px] bg-violet-600 text-white rounded disabled:opacity-60"
+                          >
+                            {lang === "ar"
+                              ? approvingLessonId === req.id
+                                ? "جاري الاعتماد..."
+                                : "اعتماد"
+                              : approvingLessonId === req.id
+                              ? "Approving..."
+                              : "Approve"}
+                          </button>
+                          <button
+                            onClick={() => handleCancelLessonSession(req.id)}
+                            disabled={cancellingLessonId === req.id}
+                            className="px-2 py-1 text-[11px] border border-red-200 text-red-700 rounded disabled:opacity-60"
+                          >
+                            {lang === "ar"
+                              ? cancellingLessonId === req.id
+                                ? "جاري الإلغاء..."
+                                : "إلغاء"
+                              : cancellingLessonId === req.id
+                              ? "Cancelling..."
+                              : "Cancel"}
+                          </button>
+                        </div>
                       ) : isPending ? (
                         <div className="flex gap-1">
                           <button

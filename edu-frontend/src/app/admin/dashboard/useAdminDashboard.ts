@@ -216,6 +216,8 @@ export function useAdminDashboard(lang: Lang, t: LangTexts) {
   const [requestsError, setRequestsError] = useState<string | null>(null);
   const [approvingId, setApprovingId] = useState<number | null>(null);
   const [rejectingId, setRejectingId] = useState<number | null>(null);
+  const [approvingLessonId, setApprovingLessonId] = useState<number | null>(null);
+  const [cancellingLessonId, setCancellingLessonId] = useState<number | null>(null);
 
   // -------------------------------------------------------------------------
   // Users (Students & Parents) state
@@ -283,10 +285,6 @@ export function useAdminDashboard(lang: Lang, t: LangTexts) {
       setLocalChecked(true);
     }
   }, []);
-
-  const localIsAdmin = useMemo(() => {
-    return !!adminUser && adminUser.role.toLowerCase() === "admin";
-  }, [adminUser]);
 
   // -------------------------------------------------------------------------
   // Session-truth admin check (uses /admin/overview)
@@ -424,8 +422,40 @@ export function useAdminDashboard(lang: Lang, t: LangTexts) {
     try {
       setRequestsLoading(true);
       setRequestsError(null);
-      const data = await adminService.getParentRequests();
-      setRequests(data);
+      const [parentData, lessonData] = await Promise.all([
+        adminService.getParentRequests(),
+        adminService.getPendingLessonRequests(),
+      ]);
+      const lessonRows = Array.isArray(lessonData)
+        ? lessonData.map((row) => {
+            const r = row as Record<string, unknown>;
+            return {
+              id: Number(r.id || 0),
+              status: "pending",
+              reason_text: null,
+              created_at: (typeof r.created_at === "string" ? r.created_at : null),
+              parent_id: 0,
+              parent_name:
+                typeof r.requested_by === "string" ? r.requested_by : "System",
+              student_id: 0,
+              student_name:
+                typeof r.requested_by === "string" ? r.requested_by : "Student",
+              subject_name_en:
+                typeof r.subject_name_en === "string" ? r.subject_name_en : "",
+              subject_name_ar:
+                typeof r.subject_name_ar === "string" ? r.subject_name_ar : "",
+              current_teacher_id: null,
+              current_teacher_name:
+                typeof r.teacher_name === "string" ? r.teacher_name : null,
+              request_type: "lesson" as const,
+            };
+          })
+        : [];
+      const parentRows = parentData.map((r) => ({
+        ...r,
+        request_type: "parent" as const,
+      }));
+      setRequests([...lessonRows, ...parentRows]);
     } catch (err: unknown) {
       setRequestsError(getErrorMessage(err, t.requestsError));
     } finally {
@@ -1016,6 +1046,32 @@ export function useAdminDashboard(lang: Lang, t: LangTexts) {
     }
   };
 
+  const handleApproveLessonRequest = useCallback(async (id: number) => {
+    setRequestsError(null);
+    setApprovingLessonId(id);
+    try {
+      await adminService.approveLessonRequest(id);
+      await Promise.all([loadRequests(), loadLessonSessions()]);
+    } catch (err: unknown) {
+      setRequestsError(getErrorMessage(err, "Failed to approve lesson request."));
+    } finally {
+      setApprovingLessonId(null);
+    }
+  }, [loadLessonSessions, loadRequests]);
+
+  const handleCancelLessonSession = useCallback(async (id: number, reason?: string) => {
+    setRequestsError(null);
+    setCancellingLessonId(id);
+    try {
+      await adminService.cancelLessonSession(id, reason);
+      await Promise.all([loadRequests(), loadLessonSessions()]);
+    } catch (err: unknown) {
+      setRequestsError(getErrorMessage(err, "Failed to cancel lesson session."));
+    } finally {
+      setCancellingLessonId(null);
+    }
+  }, [loadLessonSessions, loadRequests]);
+
   // -------------------------------------------------------------------------
   // Handlers: Users activate/deactivate
   // -------------------------------------------------------------------------
@@ -1091,9 +1147,8 @@ export function useAdminDashboard(lang: Lang, t: LangTexts) {
 
   const isAdmin = useMemo(() => {
     if (!sessionChecked) return false;
-    if (sessionIsAdmin === true) return true;
-    return localIsAdmin;
-  }, [sessionChecked, sessionIsAdmin, localIsAdmin]);
+    return sessionIsAdmin === true;
+  }, [sessionChecked, sessionIsAdmin]);
 
   // -------------------------------------------------------------------------
   // Exposed API
@@ -1231,8 +1286,12 @@ export function useAdminDashboard(lang: Lang, t: LangTexts) {
     requestsError,
     approvingId,
     rejectingId,
+    approvingLessonId,
+    cancellingLessonId,
     handleApproveRequest,
     handleRejectRequest,
+    handleApproveLessonRequest,
+    handleCancelLessonSession,
 
     students,
     studentsLoading,
