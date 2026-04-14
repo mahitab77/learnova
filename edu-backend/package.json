@@ -1,0 +1,37 @@
+{
+  "name": "edu-backend",
+  "version": "1.0.0",
+  "description": "Backend API for the bilingual student-teacher selection platform (Next.js frontend, Node.js backend, MySQL on GoDaddy).",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "dev": "node ./scripts/start-mysql-and-dev.js",
+    "dev:raw": "nodemon server.js",
+    "start": "node server.js",
+    "test": "node --test --test-concurrency=1 --experimental-test-isolation=none test/academicScope.test.js test/teacherSelection.service.test.js test/parentSwitch.cleanup.test.js test/contracts.api.test.js"
+  },
+  "keywords": [
+    "node",
+    "express",
+    "mysql",
+    "edu",
+    "backend"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.3",
+    "express": "^5.1.0",
+    "express-mysql-session": "^3.0.3",
+    "express-rate-limit": "^8.3.2",
+    "express-session": "^1.18.2",
+    "multer": "^2.0.2",
+    "mysql2": "^3.15.3",
+    "nodemailer": "^7.0.10"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.10",
+    "supertest": "^7.2.2"
+  }
+}
