@@ -37,8 +37,11 @@ function normalizeSelectionWriteInput({
 }
 
 /**
- * Assumes a unique key exists on student_teacher_selections(student_id, subject_id).
- * Controllers already rely on ON DUPLICATE KEY UPDATE for direct assignment writes.
+ * Backend is the only owner of selection-write invariants.
+ * Assumes DB unique key `uq_student_teacher_selection` on
+ * student_teacher_selections(student_id, subject_id). This makes
+ * ON DUPLICATE KEY UPDATE safe and keeps one authoritative active selection
+ * per student+subject.
  */
 export async function upsertTeacherSelection(
   executor = pool,

@@ -23,8 +23,12 @@
  *   ps.id           AS link_id,
  *   s.id            AS student_id,
  *   COALESCE(u.full_name, CONCAT('Student #', s.id)) AS student_name,
- *   s.grade_stage,
- *   s.grade_number,
+ *   s.system_id,
+ *   s.stage_id,
+ *   s.grade_level_id,
+ *   es.name         AS system_name,
+ *   gs.name_en      AS stage_name,
+ *   gl.name_en      AS grade_level_name,
  *   ps.relationship,
  *   ps.has_own_login AS has_own_login,
  *   s.user_id       AS student_user_id
@@ -39,8 +43,6 @@ export type ParentStudentRowApi = {
   system_name: string | null;
   stage_name: string | null;
   grade_level_name: string | null;
-  grade_stage: string | null;
-  grade_number: string | null;
   relationship: string;
   has_own_login: number | boolean | null;
   student_user_id: number | null;
@@ -67,8 +69,6 @@ export type ParentStudent = {
   systemName: string | null;
   stageName: string | null;
   gradeLevelName: string | null;
-  gradeStage: string | null;
-  gradeNumber: string | null;
   relationship: string;
   hasOwnLogin: boolean;
   studentUserId: number | null;

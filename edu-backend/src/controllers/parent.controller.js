@@ -1,10 +1,47 @@
 // src/controllers/parent.controller.js
 import pool from "../db.js";
-import {
-  assertTeacherEligibleForSubjectScope,
-  listEligibleTeacherIdsForSubjectScope,
-} from "../services/teacherDiscovery.service.js";
 import { upsertTeacherSelection } from "../services/teacherSelection.service.js";
+import {
+  assertTeacherEligibleForChild as assertTeacherEligibleForChildHelper,
+  findActiveTeacherSelectionForStudentSubject as findActiveTeacherSelectionForStudentSubjectHelper,
+  findParentByUserId as findParentByUserIdHelper,
+  findStudentById as findStudentByIdHelper,
+  insertParentTeacherChangeRequest as insertParentTeacherChangeRequestHelper,
+  listEligibleTeacherIdsForChild as listEligibleTeacherIdsForChildHelper,
+  loadParentTeacherFlowContext as loadParentTeacherFlowContextHelper,
+  prepareParentTeacherChangeRequest as prepareParentTeacherChangeRequestHelper,
+} from "./helpers/parentTeacherFlow.helpers.js";
+import {
+  loadAnnouncementsForAudience,
+  loadNotificationsForUser,
+  markAllNotificationsReadForUser,
+  markNotificationReadForUser,
+} from "./helpers/parentMessaging.helpers.js";
+import {
+  clearSwitchSnapshot,
+  findLinkedStudentForParent,
+  findParentProfileIdByUserId,
+  findParentUserById,
+  findStudentUserById,
+  getRequestSessionUser,
+  hasParentStudentLink,
+  parsePositiveNumber,
+  regenerateSession,
+  saveSession,
+} from "./helpers/parentSessionSwitch.helpers.js";
+import {
+  requireParent,
+  requireParentOrAdmin,
+} from "./helpers/parentControllerAuth.helpers.js";
+import {
+  isStudentLinkedToParent,
+  loadParentLinkedStudents,
+  loadParentViewStudentSelections,
+} from "../services/parentReadModel.service.js";
+import {
+  ensureParentProfileRow,
+  findParentProfileByUserId,
+} from "../services/parentProfile.service.js";
 export {
   getParentLessonSessionRating,
   upsertParentLessonSessionRating,
@@ -29,387 +66,6 @@ function getPagination(req, { defaultLimit = 50, maxLimit = 200 } = {}) {
   return { limit, offset };
 }
 
-/* =============================================================================
- * Helper functions
- * =============================================================================
- */
-
-/**
- * Find a parent profile row by the underlying users.id
- * @param {number} userId - ID from `users` table
- * @returns {Promise<object|null>}
- */
-async function findParentByUserId(userId) {
-  const [rows] = await pool.query(
-    "SELECT id, user_id, phone, notes FROM parents WHERE user_id = ? LIMIT 1",
-    [userId]
-  );
-  return rows.length ? rows[0] : null;
-}
-
-/**
- * Find a student row by its id
- * @param {number} studentId - ID from `students` table
- * @returns {Promise<object|null>}
- */
-async function findStudentById(studentId) {
-  const [rows] = await pool.query(
-    `
-    SELECT
-      id,
-      user_id,
-      system_id,
-      stage_id,
-      grade_level_id
-    FROM students
-    WHERE id = ?
-    LIMIT 1
-    `,
-    [studentId]
-  );
-  return rows.length ? rows[0] : null;
-}
-
-async function findActiveTeacherSelectionForStudentSubject(studentId, subjectId) {
-  const [rows] = await pool.query(
-    `
-    SELECT id, teacher_id
-    FROM student_teacher_selections
-    WHERE student_id = ?
-      AND subject_id = ?
-      AND status = 'active'
-    LIMIT 1
-    `,
-    [studentId, subjectId]
-  );
-
-  return rows.length ? rows[0] : null;
-}
-
-async function findActiveTeacherSelectionById(selectionId, studentId, subjectId) {
-  const [rows] = await pool.query(
-    `
-    SELECT id, teacher_id
-    FROM student_teacher_selections
-    WHERE id = ?
-      AND student_id = ?
-      AND subject_id = ?
-      AND status = 'active'
-    LIMIT 1
-    `,
-    [selectionId, studentId, subjectId]
-  );
-
-  return rows.length ? rows[0] : null;
-}
-
-async function studentHasSelectedSubject(studentId, subjectId) {
-  const [rows] = await pool.query(
-    `
-    SELECT id
-    FROM student_subjects
-    WHERE student_id = ? AND subject_id = ?
-    LIMIT 1
-    `,
-    [studentId, subjectId]
-  );
-
-  return rows.length > 0;
-}
-
-/**
- * Shared live-offering eligibility guard.
- *
- * Resolves the child's academic scope and confirms that the given teacher has
- * at least one live slot offering for that (subject, scope) combination.
- * This is the single source of truth used by both write paths
- * (selectParentTeacherOption, createParentRequest) and must stay aligned with
- * the read path (getParentTeacherOptions).
- *
- * @param {number} teacherId
- * @param {object} student  - row from `students` with normalized scope fields
- * @param {number} subjectId
- * @returns {Promise<{ ok: true } | { ok: false, status: number, message: string }>}
- */
-async function assertTeacherEligibleForChild(teacherId, student, subjectId) {
-  return assertTeacherEligibleForSubjectScope(
-    teacherId,
-    student,
-    subjectId,
-    {
-      executor: pool,
-      actorType: "child",
-      messages: {
-        scopeResolution: CHILD_SCOPE_RESOLUTION_ERROR,
-      },
-    }
-  );
-}
-
-async function listEligibleTeacherIdsForChild(student, subjectId) {
-  return listEligibleTeacherIdsForSubjectScope(student, subjectId, {
-    executor: pool,
-    actorType: "child",
-    messages: {
-      scopeResolution: CHILD_SCOPE_RESOLUTION_ERROR,
-    },
-  });
-}
-
-async function loadParentTeacherFlowContext({
-  authedUserId,
-  studentId,
-  subjectId,
-}) {
-  const parent = await findParentByUserId(authedUserId);
-  if (!parent) {
-    return {
-      ok: false,
-      status: 403,
-      message: "Parent profile not found for this user.",
-    };
-  }
-
-  const [linkRows] = await pool.query(
-    `
-    SELECT id
-    FROM parent_students
-    WHERE parent_id = ? AND student_id = ?
-    LIMIT 1
-    `,
-    [parent.id, studentId]
-  );
-
-  if (linkRows.length === 0) {
-    return {
-      ok: false,
-      status: 403,
-      message: "This student is not linked to the current parent user.",
-    };
-  }
-
-  const student = await findStudentById(studentId);
-  if (!student) {
-    return {
-      ok: false,
-      status: 404,
-      message: "Student not found.",
-    };
-  }
-
-  const hasSelectedSubject = await studentHasSelectedSubject(studentId, subjectId);
-  if (!hasSelectedSubject) {
-    return {
-      ok: false,
-      status: 400,
-      message:
-        "This subject is not selected for the student. Please add the subject first.",
-    };
-  }
-
-  const currentSelection = await findActiveTeacherSelectionForStudentSubject(
-    studentId,
-    subjectId
-  );
-
-  return {
-    ok: true,
-    parent,
-    student,
-    currentSelection,
-  };
-}
-
-async function prepareParentTeacherChangeRequest({
-  authedUserId,
-  studentId,
-  subjectId,
-  currentTeacherId = null,
-  requestedTeacherId = null,
-  selectionId = null,
-}) {
-  const flowContext = await loadParentTeacherFlowContext({
-    authedUserId,
-    studentId,
-    subjectId,
-  });
-
-  if (!flowContext.ok) {
-    return flowContext;
-  }
-
-  const { parent, student, currentSelection } = flowContext;
-
-  if (selectionId != null) {
-    const selectionRow = await findActiveTeacherSelectionById(
-      selectionId,
-      studentId,
-      subjectId
-    );
-
-    if (!selectionRow) {
-      return {
-        ok: false,
-        status: 400,
-        message:
-          "The provided selection_id does not belong to this student's active teacher selection for the subject.",
-      };
-    }
-
-    if (
-      currentSelection?.id &&
-      Number(currentSelection.id) !== Number(selectionRow.id)
-    ) {
-      return {
-        ok: false,
-        status: 409,
-        message:
-          "The current teacher selection changed before this request was submitted. Please refresh and try again.",
-      };
-    }
-  }
-
-  if (!currentSelection?.teacher_id) {
-    return {
-      ok: false,
-      status: 400,
-      message:
-        "No current teacher exists for this subject. Please use the direct teacher selection flow instead.",
-    };
-  }
-
-  const actualCurrentTeacherId = Number(currentSelection.teacher_id);
-
-  if (
-    currentTeacherId != null &&
-    Number(currentTeacherId) !== actualCurrentTeacherId
-  ) {
-    return {
-      ok: false,
-      status: 409,
-      message:
-        "The current teacher changed before this request was submitted. Please refresh and try again.",
-    };
-  }
-
-  if (requestedTeacherId == null) {
-    return {
-      ok: false,
-      status: 400,
-      message:
-        "A requested replacement teacher is required when a current teacher already exists.",
-    };
-  }
-
-  if (requestedTeacherId === actualCurrentTeacherId) {
-    return {
-      ok: false,
-      status: 400,
-      message: "Requested teacher must be different from the current teacher.",
-    };
-  }
-
-  const eligibility = await assertTeacherEligibleForChild(
-    requestedTeacherId,
-    student,
-    subjectId
-  );
-
-  if (!eligibility.ok) {
-    return eligibility;
-  }
-
-  return {
-    ok: true,
-    parent,
-    currentTeacherId: actualCurrentTeacherId,
-    requestedTeacherId,
-  };
-}
-
-async function insertParentTeacherChangeRequest({
-  parentId,
-  studentId,
-  subjectId,
-  currentTeacherId,
-  requestedTeacherId,
-  reason,
-}) {
-  const [insert] = await pool.query(
-    `
-    INSERT INTO parent_change_requests
-      (parent_id, student_id, subject_id, current_teacher_id, requested_teacher_id, reason_text, status)
-    VALUES (?, ?, ?, ?, ?, ?, 'pending')
-    `,
-    [
-      parentId,
-      studentId,
-      subjectId,
-      currentTeacherId,
-      requestedTeacherId,
-      reason,
-    ]
-  );
-
-  return insert.insertId;
-}
-
-/**
- * Ensure current user is authenticated and has parent/admin role.
- * Returns { user, errorResponse } - if errorResponse is non-null, caller must return it.
- */
-function requireParentOrAdmin(req, res) {
-  const user = req.user;
-
-  if (!user || !user.id) {
-    return {
-      user: null,
-      errorResponse: res.status(401).json({
-        success: false,
-        message: "Not authenticated. Please log in again.",
-      }),
-    };
-  }
-
-  if (user.role !== "parent" && user.role !== "admin") {
-    return {
-      user: null,
-      errorResponse: res.status(403).json({
-        success: false,
-        message:
-          "Only parent or admin users are allowed to perform this action.",
-      }),
-    };
-  }
-
-  return { user, errorResponse: null };
-}
-function requireParent(req, res) {
-  const user = req.user;
-
-  if (!user || !user.id) {
-    return {
-      user: null,
-      errorResponse: res.status(401).json({
-        success: false,
-        message: "Not authenticated. Please log in again.",
-      }),
-    };
-  }
-
-  if (user.role !== "parent") {
-    return {
-      user: null,
-      errorResponse: res.status(403).json({
-        success: false,
-        message: "Only parent users are allowed to perform this action.",
-      }),
-    };
-  }
-
-  return { user, errorResponse: null };
-}
-
 export const getMyStudents = async (req, res) => {
   const user = req.user;
 
@@ -423,7 +79,7 @@ export const getMyStudents = async (req, res) => {
     });
 
     // 1) Find parent profile for this user
-    const parent = await findParentByUserId(authedUser.id);
+    const parent = await findParentByUserIdHelper(authedUser.id);
 
     console.log("Resolved parent profile", {
       parentUserId: authedUser.id,
@@ -438,35 +94,7 @@ export const getMyStudents = async (req, res) => {
       });
     }
 
-    // 2) Load linked students with the EXACT aliases your TS expects
-    const [rows] = await pool.query(
-      `
-      SELECT
-        ps.id AS link_id,
-        s.id AS student_id,
-        u.full_name AS student_name,
-        s.system_id,
-        s.stage_id,
-        s.grade_level_id,
-        es.name         AS system_name,
-        gs.name_en      AS stage_name,
-        gl.name_en      AS grade_level_name,
-        s.grade_stage,
-        s.grade_number,
-        ps.relationship,
-        CASE WHEN ps.has_own_login = 1 THEN 1 ELSE 0 END AS has_own_login,
-        s.user_id AS student_user_id
-      FROM parent_students ps
-      INNER JOIN students s ON s.id = ps.student_id
-      INNER JOIN users u ON u.id = s.user_id
-      LEFT JOIN educational_systems es ON es.id = s.system_id
-      LEFT JOIN grade_stages gs ON gs.id = s.stage_id
-      LEFT JOIN grade_levels gl ON gl.id = s.grade_level_id
-      WHERE ps.parent_id = ?
-      ORDER BY student_name
-      `,
-      [parent.id]
-    );
+    const rows = await loadParentLinkedStudents(parent.id);
 
     console.log("getMyStudents result", {
       parentId: parent.id,
@@ -506,29 +134,19 @@ export const ensureParentProfile = async (req, res) => {
     const { user: authedUser, errorResponse } = requireParentOrAdmin(req, res);
     if (!authedUser) return errorResponse;
 
-    const existing = await findParentByUserId(authedUser.id);
-    if (existing) {
+    const ensured = await ensureParentProfileRow(authedUser.id, { phone, notes });
+    if (!ensured.created) {
       return res.json({
         success: true,
         message: "Parent profile already exists.",
-        data: existing,
+        data: ensured.profile,
       });
     }
-
-    const [result] = await pool.query(
-      "INSERT INTO parents (user_id, phone, notes) VALUES (?, ?, ?)",
-      [authedUser.id, phone || null, notes || null]
-    );
 
     return res.status(201).json({
       success: true,
       message: "Parent profile created successfully.",
-      data: {
-        id: result.insertId,
-        user_id: authedUser.id,
-        phone: phone || null,
-        notes: notes || null,
-      },
+      data: ensured.profile,
     });
   } catch (err) {
     console.error("ensureParentProfile error:", {
@@ -574,7 +192,7 @@ export const getStudentSelectionsAsParent = async (req, res) => {
     }
 
     // 1) Ensure this user has a parent profile
-    const parent = await findParentByUserId(authedUser.id);
+    const parent = await findParentByUserIdHelper(authedUser.id);
     if (!parent) {
       return res.status(403).json({
         success: false,
@@ -583,44 +201,15 @@ export const getStudentSelectionsAsParent = async (req, res) => {
     }
 
     // 2) Ensure this student is linked to this parent
-    const [linkRows] = await pool.query(
-      `
-      SELECT id
-      FROM parent_students
-      WHERE parent_id = ? AND student_id = ?
-      LIMIT 1
-      `,
-      [parent.id, numericStudentId]
-    );
-    if (linkRows.length === 0) {
+    const isLinked = await isStudentLinkedToParent(parent.id, numericStudentId);
+    if (!isLinked) {
       return res.status(403).json({
         success: false,
         message: "This student is not linked to the current parent user.",
       });
     }
 
-    // 3) Load subject selections + (optional) chosen teacher
-    const [rows] = await pool.query(
-      `
-      SELECT
-        COALESCE(sts.id, ss.id) AS id,
-        ss.subject_id,
-        subj.name_ar     AS subject_name_ar,
-        subj.name_en     AS subject_name_en,
-        sts.teacher_id   AS teacher_id,
-        COALESCE(t.name, '') AS teacher_name,
-        NULL AS photo_url
-      FROM student_subjects ss
-      INNER JOIN subjects subj ON subj.id = ss.subject_id
-      LEFT JOIN student_teacher_selections sts
-        ON sts.student_id = ss.student_id
-       AND sts.subject_id = ss.subject_id
-      LEFT JOIN teachers t ON t.id = sts.teacher_id
-      WHERE ss.student_id = ?
-      ORDER BY subj.name_en, subj.id
-      `,
-      [numericStudentId]
-    );
+    const rows = await loadParentViewStudentSelections(numericStudentId);
 
     return res.json({
       success: true,
@@ -647,7 +236,7 @@ export const getParentStudentsSelections = async (req, res) => {
     const { user: authedUser, errorResponse } = requireParentOrAdmin(req, res);
     if (!authedUser) return errorResponse;
 
-    const parent = await findParentByUserId(authedUser.id);
+    const parent = await findParentByUserIdHelper(authedUser.id);
     if (!parent) {
       return res.json({ success: true, data: {} });
     }
@@ -872,13 +461,14 @@ export const createParentRequest = async (req, res) => {
       }
     }
 
-    const preparedRequest = await prepareParentTeacherChangeRequest({
+    const preparedRequest = await prepareParentTeacherChangeRequestHelper({
       authedUserId: authedUser.id,
       studentId: numericStudentId,
       subjectId: numericSubjectId,
       currentTeacherId: numericCurrentTeacherId,
       requestedTeacherId: numericRequestedTeacherId,
       selectionId: numericSelectionId,
+      childScopeResolutionError: CHILD_SCOPE_RESOLUTION_ERROR,
     });
 
     if (!preparedRequest.ok) {
@@ -891,8 +481,8 @@ export const createParentRequest = async (req, res) => {
     // -------------------------------------------------------------------------
     // 8) Insert the request (NOW includes requested_teacher_id OK)
     // -------------------------------------------------------------------------
-    const requestId = await insertParentTeacherChangeRequest({
-      parentId: preparedRequest.parent.id,
+    const requestId = await insertParentTeacherChangeRequestHelper({
+      parentId: preparedRequest.parentId,
       studentId: numericStudentId,
       subjectId: numericSubjectId,
       currentTeacherId: preparedRequest.currentTeacherId,
@@ -1010,12 +600,13 @@ export const createChangeRequest = async (req, res) => {
       });
     }
 
-    const preparedRequest = await prepareParentTeacherChangeRequest({
+    const preparedRequest = await prepareParentTeacherChangeRequestHelper({
       authedUserId: authedUser.id,
       studentId: numericStudentId,
       subjectId: numericSubjectId,
       currentTeacherId: numericCurrentTeacherId,
       requestedTeacherId: numericRequestedTeacherId,
+      childScopeResolutionError: CHILD_SCOPE_RESOLUTION_ERROR,
     });
 
     if (!preparedRequest.ok) {
@@ -1028,8 +619,8 @@ export const createChangeRequest = async (req, res) => {
     const reason =
       typeof reasonRaw === "string" ? reasonRaw.trim().slice(0, 1000) : null;
 
-    const requestId = await insertParentTeacherChangeRequest({
-      parentId: preparedRequest.parent.id,
+    const requestId = await insertParentTeacherChangeRequestHelper({
+      parentId: preparedRequest.parentId,
       studentId: numericStudentId,
       subjectId: numericSubjectId,
       currentTeacherId: preparedRequest.currentTeacherId,
@@ -1081,7 +672,7 @@ export const getParentRequests = async (req, res) => {
     // -------------------------------------------------------------------------
     // 2) Resolve parent profile
     // -------------------------------------------------------------------------
-    const parent = await findParentByUserId(authedUser.id);
+    const parent = await findParentByUserIdHelper(authedUser.id);
     if (!parent) {
       // Not an error: parent simply has no profile yet
       return res.json({
@@ -1174,7 +765,7 @@ export const getParentAssignments = async (req, res) => {
     const { user: authedUser, errorResponse } = requireParentOrAdmin(req, res);
     if (!authedUser) return errorResponse;
 
-    const parent = await findParentByUserId(authedUser.id);
+    const parent = await findParentByUserIdHelper(authedUser.id);
     if (!parent) {
       return res.json({
         success: true,
@@ -1322,7 +913,7 @@ export const getParentTeacherOptions = async (req, res) => {
       });
     }
 
-    const parent = await findParentByUserId(authedUser.id);
+    const parent = await findParentByUserIdHelper(authedUser.id);
     if (!parent) {
       return res.status(403).json({
         success: false,
@@ -1348,7 +939,7 @@ export const getParentTeacherOptions = async (req, res) => {
     }
 
     // Ensure student exists so we can resolve the child's academic scope
-    const student = await findStudentById(numericStudentId);
+    const student = await findStudentByIdHelper(numericStudentId);
     if (!student) {
       return res.status(404).json({
         success: false,
@@ -1356,9 +947,10 @@ export const getParentTeacherOptions = async (req, res) => {
       });
     }
 
-    const eligibleTeachers = await listEligibleTeacherIdsForChild(
+    const eligibleTeachers = await listEligibleTeacherIdsForChildHelper(
       student,
-      numericSubjectId
+      numericSubjectId,
+      CHILD_SCOPE_RESOLUTION_ERROR
     );
     if (!eligibleTeachers.ok) {
       return res.status(eligibleTeachers.status).json({
@@ -1368,7 +960,7 @@ export const getParentTeacherOptions = async (req, res) => {
     }
 
     const { teacherIds: eligibleTeacherIds } = eligibleTeachers;
-    const currentSelection = await findActiveTeacherSelectionForStudentSubject(
+    const currentSelection = await findActiveTeacherSelectionForStudentSubjectHelper(
       numericStudentId,
       numericSubjectId
     );
@@ -1501,7 +1093,7 @@ export const selectParentTeacherOption = async (req, res) => {
       });
     }
 
-    const flowContext = await loadParentTeacherFlowContext({
+    const flowContext = await loadParentTeacherFlowContextHelper({
       authedUserId: authedUser.id,
       studentId: numericStudentId,
       subjectId: numericSubjectId,
@@ -1519,10 +1111,11 @@ export const selectParentTeacherOption = async (req, res) => {
     // Enforce live-offering eligibility - same gate as getParentTeacherOptions.
     // A teacher must have an active live slot for this subject+child academic
     // scope; a bare teacher_subjects row is not sufficient.
-    const eligibility = await assertTeacherEligibleForChild(
+    const eligibility = await assertTeacherEligibleForChildHelper(
       numericTeacherId,
       student,
-      numericSubjectId
+      numericSubjectId,
+      CHILD_SCOPE_RESOLUTION_ERROR
     );
     if (!eligibility.ok) {
       return res.status(eligibility.status).json({
@@ -1597,8 +1190,7 @@ export const switchToStudent = async (req, res) => {
   const studentUserIdRaw = body.student_user_id ?? body.studentUserId;
 
   try {
-    // OK Robust: support either req.user (from auth middleware) OR req.session.user (global attach)
-    const user = req.user || req.session?.user || null;
+    const user = getRequestSessionUser(req);
 
     // 0) Auth + role checks
     if (!user?.id) {
@@ -1617,8 +1209,8 @@ export const switchToStudent = async (req, res) => {
     }
 
     // 1) Validate input
-    const studentUserId = Number(studentUserIdRaw);
-    if (!Number.isFinite(studentUserId) || studentUserId <= 0) {
+    const studentUserId = parsePositiveNumber(studentUserIdRaw);
+    if (!studentUserId) {
       return res.status(400).json({
         success: false,
         message: "student_user_id must be a valid positive number.",
@@ -1645,37 +1237,18 @@ export const switchToStudent = async (req, res) => {
     }
 
     // 4) Resolve parent profile (parents.user_id -> parents.id)
-    const [pRows] = await pool.query(
-      "SELECT id FROM parents WHERE user_id = ? LIMIT 1",
-      [user.id]
-    );
-
-    if (!pRows.length) {
+    const parentProfile = await findParentByUserIdHelper(user.id);
+    if (!parentProfile) {
       return res.status(403).json({
         success: false,
         message: "Parent profile not found for this user.",
         code: "PARENT_PROFILE_NOT_FOUND",
       });
     }
-    const parentId = pRows[0].id;
+    const parentId = parentProfile.id;
 
-    // 5) Verify the student belongs to this parent (via students.user_id)
-    const [linkRows] = await pool.query(
-      `
-      SELECT
-        s.id     AS student_id,
-        CASE WHEN ps.has_own_login = 1 THEN 1 ELSE 0 END AS has_own_login,
-        s.user_id AS student_user_id
-      FROM parent_students ps
-      INNER JOIN students s ON s.id = ps.student_id
-      WHERE ps.parent_id = ?
-        AND s.user_id = ?
-      LIMIT 1
-      `,
-      [parentId, studentUserId]
-    );
-
-    if (!linkRows.length) {
+    const linkedStudent = await findLinkedStudentForParent(pool, parentId, studentUserId);
+    if (!linkedStudent) {
       return res.status(403).json({
         success: false,
         message: "This student is not linked to the current parent user.",
@@ -1683,21 +1256,14 @@ export const switchToStudent = async (req, res) => {
       });
     }
 
-    // 6) Load the student user row (must be role=student)
-    const [uRows] = await pool.query(
-      "SELECT id, full_name, email, role, is_active FROM users WHERE id = ? LIMIT 1",
-      [studentUserId]
-    );
-
-    if (!uRows.length || String(uRows[0].role).toLowerCase() !== "student") {
+    const studentUser = await findStudentUserById(pool, studentUserId);
+    if (!studentUser || String(studentUser.role).toLowerCase() !== "student") {
       return res.status(404).json({
         success: false,
         message: "Student user not found.",
         code: "STUDENT_USER_NOT_FOUND",
       });
     }
-
-    const studentUser = uRows[0];
 
     // 7) Enforce canonical account-state policy:
     //    Inactive child accounts are not switchable and must never be reactivated
@@ -1712,9 +1278,7 @@ export const switchToStudent = async (req, res) => {
     }
 
     // 8) Rotate session id (prevents session fixation)
-    await new Promise((resolve, reject) => {
-      req.session.regenerate((err) => (err ? reject(err) : resolve()));
-    });
+    await regenerateSession(req);
 
     // 9) Save parent snapshot (used later to restore)
     //    Keep it minimal and safe (no secrets).
@@ -1743,9 +1307,7 @@ export const switchToStudent = async (req, res) => {
     };
 
     // 12) Persist session
-    await new Promise((resolve, reject) => {
-      req.session.save((err) => (err ? reject(err) : resolve()));
-    });
+    await saveSession(req);
 
     return res.json({
       success: true,
@@ -1753,7 +1315,7 @@ export const switchToStudent = async (req, res) => {
       data: {
         as: "student",
         student_user_id: studentUserId,
-        student_id: linkRows[0].student_id,
+        student_id: linkedStudent.student_id,
       },
     });
   } catch (err) {
@@ -1817,27 +1379,9 @@ export const switchBackToParent = async (req, res) => {
       });
     }
 
-    // 3) Re-validate parent identity against current DB state before restore.
-    const [parentUserRows] = await pool.query(
-      `
-      SELECT id, role, is_active
-      FROM users
-      WHERE id = ?
-      LIMIT 1
-      `,
-      [parentUser.id]
-    );
-
-    const clearSwitchSnapshot = async () => {
-      delete req.session.parent_user;
-      delete req.session.switch_ctx;
-      await new Promise((resolve) => {
-        req.session.save(() => resolve());
-      });
-    };
-
-    if (!parentUserRows.length) {
-      await clearSwitchSnapshot();
+    const dbParentUser = await findParentUserById(pool, parentUser.id);
+    if (!dbParentUser) {
+      await clearSwitchSnapshot(req);
       return res.status(401).json({
         success: false,
         message: "Parent account could not be restored because it no longer exists.",
@@ -1845,9 +1389,8 @@ export const switchBackToParent = async (req, res) => {
       });
     }
 
-    const dbParentUser = parentUserRows[0];
     if (String(dbParentUser.role || "").toLowerCase() !== "parent" || !dbParentUser.is_active) {
-      await clearSwitchSnapshot();
+      await clearSwitchSnapshot(req);
       return res.status(403).json({
         success: false,
         message: "Parent account is not active or no longer eligible for restore.",
@@ -1855,28 +1398,37 @@ export const switchBackToParent = async (req, res) => {
       });
     }
 
-    const [parentProfileRows] = await pool.query(
-      `
-      SELECT id
-      FROM parents
-      WHERE user_id = ?
-      LIMIT 1
-      `,
-      [parentUser.id]
-    );
-    if (!parentProfileRows.length) {
-      await clearSwitchSnapshot();
+    const parentId = await findParentProfileIdByUserId(pool, parentUser.id);
+    if (!parentId) {
+      await clearSwitchSnapshot(req);
       return res.status(403).json({
         success: false,
         message: "Parent profile is missing and cannot be restored.",
         code: "PARENT_RESTORE_INVALID",
       });
     }
+    const switchedStudentUserId = parsePositiveNumber(req.session.switch_ctx.student_user_id);
+    if (!switchedStudentUserId) {
+      await clearSwitchSnapshot(req);
+      return res.status(400).json({
+        success: false,
+        message: "Switch context is invalid.",
+        code: "INVALID_SWITCH_CONTEXT",
+      });
+    }
+
+    const linkStillValid = await hasParentStudentLink(pool, parentId, switchedStudentUserId);
+    if (!linkStillValid) {
+      await clearSwitchSnapshot(req);
+      return res.status(403).json({
+        success: false,
+        message: "Parent-student linkage changed. Please sign in again.",
+        code: "PARENT_STUDENT_LINK_STALE",
+      });
+    }
 
     // 4) Rotate session id again when switching identities (best practice)
-    await new Promise((resolve, reject) => {
-      req.session.regenerate((err) => (err ? reject(err) : resolve()));
-    });
+    await regenerateSession(req);
 
     // 5) Restore parent identity and clear switch data
     req.session.user = {
@@ -1890,9 +1442,7 @@ export const switchBackToParent = async (req, res) => {
     delete req.session.switch_ctx;
 
     // 6) Persist session
-    await new Promise((resolve, reject) => {
-      req.session.save((err) => (err ? reject(err) : resolve()));
-    });
+    await saveSession(req);
 
     return res.json({
       success: true,
@@ -1908,67 +1458,6 @@ export const switchBackToParent = async (req, res) => {
     });
   }
 };
-async function loadAnnouncementsForAudience(audience) {
-  const [rows] = await pool.query(
-    `
-    SELECT id, title, body, audience, created_at
-    FROM announcements
-    WHERE audience IN ('all', ?)
-    ORDER BY created_at DESC
-    LIMIT 50
-    `,
-    [audience]
-  );
-
-  return rows.map((r) => ({
-    id: r.id,
-    title: r.title,
-    body: r.body,
-    audience: r.audience,
-    createdAt: r.created_at,
-  }));
-}
-
-async function loadNotificationsForUser(userId) {
-  const [countRows] = await pool.query(
-    `
-    SELECT COUNT(*) AS unread_count
-    FROM notifications
-    WHERE user_id = ?
-      AND is_read = 0
-    `,
-    [userId]
-  );
-
-  const unreadCount = countRows?.[0]?.unread_count || 0;
-
-  const [items] = await pool.query(
-    `
-    SELECT id, type, title, body, related_type, related_id, is_read, read_at, created_at
-    FROM notifications
-    WHERE user_id = ?
-    ORDER BY created_at DESC
-    LIMIT 50
-    `,
-    [userId]
-  );
-
-  return {
-    unreadCount,
-    items: items.map((r) => ({
-      id: r.id,
-      type: r.type,
-      title: r.title,
-      body: r.body,
-      relatedType: r.related_type,
-      relatedId: r.related_id,
-      isRead: !!r.is_read,
-      readAt: r.read_at ?? null,
-      createdAt: r.created_at ?? null,
-    })),
-  };
-}
-
 export const getParentAnnouncements = async (req, res) => {
   try {
     const { user: authedUser, errorResponse } = requireParent(req, res);
@@ -2000,20 +1489,12 @@ export const markParentNotificationRead = async (req, res) => {
     const { user: authedUser, errorResponse } = requireParent(req, res);
     if (!authedUser) return errorResponse;
 
-    const id = Number(req.params?.id);
-    if (!Number.isFinite(id) || id <= 0) {
+    const id = parsePositiveNumber(req.params?.id);
+    if (!id) {
       return res.status(400).json({ success: false, message: "Invalid notification id." });
     }
 
-    const [result] = await pool.query(
-      `
-      UPDATE notifications
-      SET is_read = 1, read_at = NOW()
-      WHERE id = ?
-        AND user_id = ?
-      `,
-      [id, authedUser.id]
-    );
+    const result = await markNotificationReadForUser(id, authedUser.id);
 
     if (result.affectedRows === 0) {
       return res.status(404).json({ success: false, message: "Notification not found." });
@@ -2031,15 +1512,7 @@ export const markAllParentNotificationsRead = async (req, res) => {
     const { user: authedUser, errorResponse } = requireParent(req, res);
     if (!authedUser) return errorResponse;
 
-    await pool.query(
-      `
-      UPDATE notifications
-      SET is_read = 1, read_at = NOW()
-      WHERE user_id = ?
-        AND is_read = 0
-      `,
-      [authedUser.id]
-    );
+    await markAllNotificationsReadForUser(authedUser.id);
 
     return res.json({ success: true, message: "All notifications marked as read." });
   } catch (err) {

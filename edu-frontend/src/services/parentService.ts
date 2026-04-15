@@ -25,8 +25,12 @@ export type ParentStudentRow = {
   link_id: number;
   student_id: number;
   student_name: string;
-  grade_stage: string | number | null;
-  grade_number: string | number | null;
+  system_id: number | null;
+  stage_id: number | null;
+  grade_level_id: number | null;
+  system_name: string | null;
+  stage_name: string | null;
+  grade_level_name: string | null;
   relationship: string | null;
   has_own_login: number | boolean | null;
   student_user_id: number | null;
@@ -113,6 +117,7 @@ export type TeacherOptionRow = {
   demo_video_url: string | null;
   years_experience: number | null;
   rating: number | null;
+  rating_count?: number | null;
 };
 
 export type SwitchToStudentResponse = {
@@ -311,6 +316,20 @@ export const parentService = {
     );
   },
 
+  getParentStudentsSelectionsMap(studentIds: number[]) {
+    const uniqueIds = [...new Set(studentIds.filter((id) => Number.isFinite(id) && id > 0))];
+    if (!uniqueIds.length) {
+      return Promise.resolve({
+        success: true,
+        data: {} as Record<string, StudentSelectionRow[]>,
+      });
+    }
+
+    return apiFetch<Record<string, StudentSelectionRow[]>>(
+      `${PARENT_BASE}/students/selections?student_ids=${encodeURIComponent(uniqueIds.join(","))}`
+    );
+  },
+
   // --------------------------------------------------------------------------
   // Requests
   // --------------------------------------------------------------------------
@@ -373,18 +392,29 @@ export const parentService = {
   // Session switch (Tier B - session-only)
   // --------------------------------------------------------------------------
 
-  switchToStudent(studentUserId: number) {
-    return apiFetch<SwitchToStudentResponse>(`${PARENT_BASE}/switch-to-student`, {
-      method: "POST",
-      jsonBody: { student_user_id: studentUserId },
-    });
+  async switchToStudent(studentUserId: number) {
+    const result = await apiFetch<SwitchToStudentResponse>(
+      `${PARENT_BASE}/switch-to-student`,
+      {
+        method: "POST",
+        jsonBody: { student_user_id: studentUserId },
+      }
+    );
+    if (result.success) {
+      clearParentCsrfToken();
+    }
+    return result;
   },
 
-  switchBackToParent() {
-    return apiFetch<SwitchBackResponse>(`${PARENT_BASE}/switch-back`, {
+  async switchBackToParent() {
+    const result = await apiFetch<SwitchBackResponse>(`${PARENT_BASE}/switch-back`, {
       method: "POST",
       jsonBody: {},
     });
+    if (result.success) {
+      clearParentCsrfToken();
+    }
+    return result;
   },
     // --------------------------------------------------------------------------
   // Announcements + Notifications (Messages tab)

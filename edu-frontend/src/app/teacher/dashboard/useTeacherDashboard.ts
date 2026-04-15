@@ -30,338 +30,45 @@ import {
 } from "@/src/lib/cairoTime";
 import type {
   Lang,
+  TeacherProfile,
+  TeacherStudentRow,
+  LessonSessionRow,
+  LessonSessionDetails,
+  HomeworkRow,
+  HomeworkSubmissionRow,
+  QuizSubmissionRow,
+  ScheduleSlotRow,
+  ScheduleExceptionRow,
+  TeacherVideoRow,
+  PendingLessonRequestRow,
   TeacherAnnouncementRow,
+  TeacherSubjectRow,
   TeacherDashboardTabId,
-  TeacherNotificationApiResponse,
   TeacherNotificationInbox,
   TeacherNotificationRow,
   QuizRow,
   SlotOfferingRow as SlotOfferingPayloadRow,
   SlotOfferingsResponseRow,
-  GradeCatalogSystem,
-  GradeCatalogStage,
-  GradeCatalogLevel,
   ScheduleOfferingsMap,
   SlotStatusKind,
+  GradeTarget as TeacherGradeTarget,
 } from "./teacherDashboardTypes";
 import { teacherTypeUtils } from "./teacherDashboardTypes";
 import { teacherDashboardTexts } from "./teacherDashboardTexts";
-
-// -----------------------------------------------------------------------------
-// Type Definitions (Aligned with Backend Controller)
-// IMPORTANT: These are duplicated from teacherDashboardTypes.ts for completeness
-// but the messages types are imported directly from the shared types file
-// -----------------------------------------------------------------------------
-
-export type TeacherProfile = {
-  id: number;
-  user_id: number;
-  status: string;
-  is_active: number;
-  name?: string | null;
-  bio_short?: string | null;
-  gender?: "male" | "female" | null;
-  photo_url?: string | null;
-  phone?: string | null;
-  nationality?: string | null;
-  date_of_birth?: string | null;
-  university?: string | null;
-  specialization?: string | null;
-  current_occupation?: string | null;
-  teaching_style?: string | null;
-  bio_long?: string | null;
-  references_text?: string | null;
-  education_system_id?: number | null;
-  years_of_experience?: string | null;
-  highest_qualification?: string | null;
-  hourly_rate?: string | null;
-  teaching_philosophy?: string | null;
-  achievements?: string | null;
-  user_full_name?: string | null;
-  user_email?: string | null;
-  user_preferred_lang?: string | null;
-};
-
-export type TeacherStudentRow = {
-  id: number;
-  student_id: number;
-  subject_id: number;
-  teacher_id: number;
-  selected_by: string;
-  status: string;
-  selected_at: string;
-  student_name: string;
-  student_email: string;
-  subject_name_en: string;
-  subject_name_ar: string;
-};
-
-export type LessonSessionRow = {
-  id: number;
-  teacher_id: number;
-  subject_id: number;
-  system_id?: number | null;
-  stage_id?: number | null;
-  grade_level_id?: number | null;
-  schedule_id?: number | null;
-  exception_id?: number | null;
-  starts_at: string;
-  ends_at: string;
-  is_group?: number | null;
-  max_students?: number | null;
-  created_by_user_id?: number | null;
-  student_id?: number | null;
-  status:
-    | "pending"
-    | "rejected"
-    | "scheduled"
-    | "completed"
-    | "cancelled"
-    | "no_show"
-    | "approved"
-    | (string & {});
-  cancel_reason?: string | null;
-  created_at?: string;
-  subject_name_en: string;
-  subject_name_ar: string;
-  students_count: number;
-};
-
-export type LessonSessionDetails = {
-  session: LessonSessionRow;
-  students: Array<{
-    id: number;
-    student_id: number;
-    attendance_status:
-      | "scheduled"
-      | "present"
-      | "absent"
-      | "late"
-      | "excused"
-      | (string & {});
-    joined_at: string | null;
-    left_at: string | null;
-    user_id: number;
-    student_name: string;
-    student_email: string;
-  }>;
-};
-
-export type HomeworkRow = {
-  id: number;
-  teacher_id: number;
-  subject_id: number;
-  title: string;
-  description: string | null;
-  due_at: string;
-  max_score: number | null;
-  attachments_url: string | null;
-  is_active: number;
-  subject_name_en: string;
-  subject_name_ar: string;
-};
-
-export type HomeworkSubmissionRow = {
-  id: number;
-  homework_id: number;
-  student_id: number;
-  submission_url: string | null;
-  submitted_at?: string | null;
-  status: string;
-  score: number | null;
-  feedback: string | null;
-  student_name: string;
-  student_email: string;
-};
-
-
-export type QuizSubmissionRow = {
-  id: number;
-  quiz_id: number;
-  student_id: number;
-
-  submission_url: string | null;
-  submitted_at: string | null;
-  status: string;
-
-  score: number | null;
-  feedback: string | null;
-
-  answers?: unknown;
-
-  student_name: string;
-  student_email: string;
-};
-
-export type ScheduleSlotRow = {
-  id: number;
-  teacher_id: number;
-  weekday: number;
-  start_time: string;
-  end_time: string;
-  is_group: number;
-  max_students: number | null;
-  is_active: number;
-};
-
-export type ScheduleExceptionRow = {
-  id: number;
-  teacher_id: number;
-  exception_date: string;
-  start_time: string;
-  end_time: string;
-  exception_type: "unavailable" | "extra_available" | (string & {});
-  is_group: number;
-  max_students: number | null;
-  note: string | null;
-  reason: string | null;
-  is_active: number;
-};
-
-export type TeacherVideoRow = {
-  id: number;
-  teacher_id: number;
-  subject_id: number;
-  video_url: string;
-  is_primary: number;
-  subject_name_en: string | null;
-  subject_name_ar: string | null;
-};
-
-export type PendingLessonRequestRow = {
-  id: number;
-  teacher_id: number;
-  subject_id: number;
-  schedule_id: number | null;
-  starts_at: string;
-  ends_at: string;
-  status: "pending";
-  created_by_user_id: number;
-  student_id: number | null;
-  student_name: string;
-  student_email: string | null;
-  requester_name: string | null;
-  requester_email: string | null;
-  subject_name_en: string;
-  subject_name_ar: string;
-};
-
-export type TeacherSubjectRow = {
-  subject_id: number;
-  name_en: string | null;
-  name_ar: string | null;
-};
-
-type GradeCatalogState = {
-  systems: GradeCatalogSystem[];
-  stages: GradeCatalogStage[];
-  levels: GradeCatalogLevel[];
-};
-
-const EMPTY_GRADE_CATALOG: GradeCatalogState = {
-  systems: [],
-  stages: [],
-  levels: [],
-};
-
-// -----------------------------------------------------------------------------
-// Helper Functions
-// -----------------------------------------------------------------------------
-
-/**
- * Type guard for Record objects
- */
-const isRecord = (v: unknown): v is Record<string, unknown> =>
-  typeof v === "object" && v !== null;
-
-/**
- * Safely gets a property from a Record
- */
-function getProp(v: Record<string, unknown>, key: string): unknown {
-  return v[key];
-}
-
-/**
- * Strictly unwraps canonical API envelopes:
- * - { success: true, data: ... }
- * - { ok: true, data: ... }
- */
-function unwrapData<T>(raw: unknown): T {
-  if (!isRecord(raw) || !("data" in raw)) {
-    throw new Error("Invalid API response shape.");
-  }
-
-  const success =
-    ("success" in raw && raw.success === true) ||
-    ("ok" in raw && raw.ok === true);
-
-  if (!success) {
-    const message = typeof raw.message === "string" ? raw.message : "Request failed";
-    throw new Error(message);
-  }
-
-  return raw.data as T;
-}
-
-/**
- * Safely converts unknown to array, returns empty array if invalid
- */
-function asArray<T>(raw: unknown): T[] {
-  const v = unwrapData<unknown>(raw);
-  return Array.isArray(v) ? (v as T[]) : [];
-}
-
-/**
- * Safely trims strings, returns empty string for non-strings
- */
-function safeTrim(v: unknown): string {
-  return typeof v === "string" ? v.trim() : "";
-}
-
-/**
- * Canonical backend weekday contract:
- * 1=Monday .. 7=Sunday.
- * During rollout we still tolerate legacy Sunday=0 and normalize it to 7.
- */
-function normalizeCanonicalWeekday(value: unknown): number {
-  const weekday = Number(value);
-  if (!Number.isFinite(weekday)) return 1;
-  const normalized = Math.trunc(weekday);
-  if (normalized === 0) return 7;
-  if (normalized >= 1 && normalized <= 7) return normalized;
-  return 1;
-}
-
-function normalizeScheduleSlotRows(raw: unknown): ScheduleSlotRow[] {
-  return asArray<ScheduleSlotRow>(raw).map((slot) => ({
-    ...slot,
-    weekday: normalizeCanonicalWeekday(slot.weekday),
-  }));
-}
-
-function normalizeSlotOfferingRows(raw: unknown): SlotOfferingsResponseRow[] {
-  return asArray<SlotOfferingsResponseRow>(raw);
-}
-
-function normalizeTeacherSubjectRows(raw: unknown): TeacherSubjectRow[] {
-  return asArray<TeacherSubjectRow>(raw);
-}
-
-function normalizeGradeCatalog(raw: unknown): GradeCatalogState {
-  if (!isRecord(raw)) return EMPTY_GRADE_CATALOG;
-
-  return {
-    systems: Array.isArray(raw.systems)
-      ? (raw.systems as GradeCatalogSystem[])
-      : [],
-    stages: Array.isArray(raw.stages)
-      ? (raw.stages as GradeCatalogStage[])
-      : [],
-    levels: Array.isArray(raw.levels)
-      ? (raw.levels as GradeCatalogLevel[])
-      : [],
-  };
-}
+import {
+  EMPTY_GRADE_CATALOG,
+  asArray,
+  normalizeAnnouncementRow,
+  normalizeGradeCatalog,
+  normalizeScheduleSlotRows,
+  normalizeSlotOfferingRows,
+  normalizeTeacherInbox,
+  normalizeTeacherSubjectRows,
+  normalizeCanonicalWeekday,
+  safeTrim,
+  type GradeCatalogState,
+  unwrapData,
+} from "./teacherDashboardMappers";
 
 // ---------------------------------------------------------------------------
 // Shared scheduling time contract
@@ -480,160 +187,11 @@ async function teacherApiFetch<T>(
   return unwrapData<T>(res);
 }
 
-/**
- * Ensures a notification row has the correct TeacherNotificationRow shape
- * Backend returns camelCase, we keep it as camelCase
- */
-function normalizeNotificationRow(backendRow: unknown): TeacherNotificationRow {
-  const r = isRecord(backendRow) ? backendRow : {};
-
-  const id = Number(getProp(r, "id")) || 0;
-
-  const type =
-    typeof getProp(r, "type") === "string" ? String(getProp(r, "type")) : "";
-  const title =
-    typeof getProp(r, "title") === "string" ? String(getProp(r, "title")) : "";
-
-  const bodyRaw = getProp(r, "body");
-  const messageRaw = getProp(r, "message");
-  const body =
-    typeof bodyRaw === "string"
-      ? bodyRaw
-      : typeof messageRaw === "string"
-      ? messageRaw
-      : null;
-
-  const relatedTypeRaw =
-    getProp(r, "relatedType") ?? getProp(r, "related_type");
-  const relatedType =
-    typeof relatedTypeRaw === "string" ? relatedTypeRaw : null;
-
-  const relatedIdRaw = getProp(r, "relatedId") ?? getProp(r, "related_id");
-  const relatedId =
-    typeof relatedIdRaw === "number"
-      ? relatedIdRaw
-      : Number.isFinite(Number(relatedIdRaw))
-      ? Number(relatedIdRaw)
-      : null;
-
-  const isReadRaw = getProp(r, "isRead");
-  const isReadNormalized = teacherTypeUtils.normalizeIsRead(
-    typeof isReadRaw === "boolean" || isReadRaw === 0 || isReadRaw === 1
-      ? isReadRaw
-      : 0
-  );
-
-  const readAtRaw = getProp(r, "readAt") ?? getProp(r, "read_at");
-  const readAt = typeof readAtRaw === "string" ? readAtRaw : null;
-
-  const createdAtRaw = getProp(r, "createdAt") ?? getProp(r, "created_at");
-  const createdAt = typeof createdAtRaw === "string" ? createdAtRaw : null;
-
-  return {
-    id,
-    type,
-    title,
-    body,
-    relatedType,
-    relatedId,
-    isRead: isReadNormalized,
-    readAt,
-    createdAt,
-  };
-}
-
-/**
- * ✅ FIXED: Ensures an announcement row has the correct TeacherAnnouncementRow shape
- * Always normalizes backend data to guarantee field consistency
- * Backend returns camelCase, we keep it as camelCase
- */
-function normalizeAnnouncementRow(backendRow: unknown): TeacherAnnouncementRow {
-  const r = isRecord(backendRow) ? backendRow : {};
-
-  const id = Number(getProp(r, "id")) || 0;
-
-  const titleRaw = getProp(r, "title");
-  const title = typeof titleRaw === "string" ? titleRaw : "";
-
-  const bodyRaw = getProp(r, "body");
-  const contentRaw = getProp(r, "content");
-  const body =
-    typeof bodyRaw === "string"
-      ? bodyRaw
-      : typeof contentRaw === "string"
-      ? contentRaw
-      : "";
-
-  const audienceRaw = getProp(r, "audience");
-  const audience =
-    audienceRaw === "all" ||
-    audienceRaw === "students" ||
-    audienceRaw === "parents" ||
-    audienceRaw === "teachers"
-      ? audienceRaw
-      : "all";
-
-  const createdAtRaw = getProp(r, "createdAt") ?? getProp(r, "created_at");
-  const createdAt = typeof createdAtRaw === "string" ? createdAtRaw : null;
-
-  return { id, title, body, audience, createdAt };
-}
-
-/**
- * ✅ FIXED: Normalizes teacher notifications API response into inbox format
- * CRASH-PROOF: Safely handles both array and inbox object responses
- * Uses safe property access via getProp to prevent runtime errors
- */
-function normalizeTeacherInbox(
-  raw: TeacherNotificationApiResponse
-): TeacherNotificationInbox {
-  // Handle array response (list of notifications)
-  if (Array.isArray(raw)) {
-    const items = raw.map(normalizeNotificationRow);
-    const unreadCount = items.reduce((acc, n) => {
-      const isRead = teacherTypeUtils.normalizeIsRead(n.isRead);
-      return acc + (isRead ? 0 : 1);
-    }, 0);
-    return { unreadCount, items };
-  }
-
-  // ✅ SAFE OBJECT BRANCH: Handle inbox object response with crash-proof property access
-  const obj = isRecord(raw) ? raw : {};
-  const rawItems = Array.isArray(getProp(obj, "items"))
-    ? (getProp(obj, "items") as unknown[])
-    : [];
-  const items = rawItems.map(normalizeNotificationRow);
-
-  const unreadCountRaw = getProp(obj, "unreadCount");
-  const unreadCount =
-    typeof unreadCountRaw === "number"
-      ? unreadCountRaw
-      : items.reduce((acc, n) => {
-          const isRead = teacherTypeUtils.normalizeIsRead(n.isRead);
-          return acc + (isRead ? 0 : 1);
-        }, 0);
-
-  return { unreadCount, items };
-}
-
 // -----------------------------------------------------------------------------
 // Hook Types
 // -----------------------------------------------------------------------------
 
-export type GradeTarget =
-  | {
-      kind: "homework";
-      submissionId: number;
-      currentScore: number | null;
-      currentFeedback: string | null;
-    }
-  | {
-      kind: "quiz";
-      submissionId: number;
-      currentScore: number | null;
-      currentFeedback: string | null;
-    }
-  | null;
+export type GradeTarget = TeacherGradeTarget;
 
 // -----------------------------------------------------------------------------
 // Main Hook

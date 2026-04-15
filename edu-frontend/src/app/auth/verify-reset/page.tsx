@@ -3,7 +3,7 @@
 
 import React, { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { API_BASE } from "@/src/lib/api";
+import { authService } from "@/src/services/authService";
 
 // backend: POST /auth/verify-reset
 // body: { email, otp, newPassword }
@@ -54,33 +54,11 @@ export default function VerifyResetPage() {
     try {
       setLoading(true);
 
-      const res = await fetch(`${API_BASE}/auth/verify-reset`, {
-        method: "POST",
-        credentials: "include",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          email: email.trim(),
-          otp: otp.trim(),
-          newPassword: newPassword.trim(),
-        }),
+      const data: VerifyResponse = await authService.verifyPasswordReset({
+        email: email.trim(),
+        otp: otp.trim(),
+        newPassword: newPassword.trim(),
       });
-
-      const data: VerifyResponse = await res.json().catch(() => {
-        return { success: false, message: "Invalid server response." };
-      });
-
-      if (!res.ok) {
-        const msg =
-          typeof data === "object" &&
-          data !== null &&
-          "message" in data &&
-          typeof (data as { message?: string }).message === "string"
-            ? (data as { message: string }).message
-            : "Password reset failed.";
-        throw new Error(msg);
-      }
 
       if (
         typeof data === "object" &&

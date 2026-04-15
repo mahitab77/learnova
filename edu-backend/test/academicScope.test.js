@@ -260,6 +260,81 @@ test("teacher selection and booking helpers reject grade-specific-only offerings
   assert.equal(bookingMatch, false);
 });
 
+test("null-grade semantics stay consistent across discovery, selection, and booking", async () => {
+  const executor = createScopeMatchExecutor({
+    offeringRows: [
+      {
+        teacher_id: 410,
+        subject_id: 51,
+        system_id: 1,
+        stage_id: 2,
+        grade_level_id: 6,
+        schedule_is_active: 1,
+        offering_is_active: 1,
+        is_active: 1,
+        schedule_id: 8101,
+      },
+      {
+        teacher_id: 411,
+        subject_id: 51,
+        system_id: 1,
+        stage_id: 2,
+        grade_level_id: null,
+        schedule_is_active: 1,
+        offering_is_active: 1,
+        is_active: 1,
+        schedule_id: 8102,
+      },
+    ],
+  });
+
+  const discoveryRows = await listTeacherIdsWithLiveOfferingForScope(
+    51,
+    1,
+    2,
+    null,
+    executor
+  );
+  const selectionGradeSpecific = await teacherHasLiveOfferingForScope(
+    410,
+    51,
+    1,
+    2,
+    null,
+    executor
+  );
+  const selectionStageWide = await teacherHasLiveOfferingForScope(
+    411,
+    51,
+    1,
+    2,
+    null,
+    executor
+  );
+  const bookingGradeSpecific = await scheduleHasLiveOfferingForScope(
+    8101,
+    51,
+    1,
+    2,
+    null,
+    executor
+  );
+  const bookingStageWide = await scheduleHasLiveOfferingForScope(
+    8102,
+    51,
+    1,
+    2,
+    null,
+    executor
+  );
+
+  assert.deepEqual(discoveryRows, [411]);
+  assert.equal(selectionGradeSpecific, false);
+  assert.equal(selectionStageWide, true);
+  assert.equal(bookingGradeSpecific, false);
+  assert.equal(bookingStageWide, true);
+});
+
 test("teacher availability response filtering keeps only stage-wide offerings for null-grade students", () => {
   const scope = { systemId: 1, stageId: 2, gradeLevelId: null };
   const slotScopes = [

@@ -7,7 +7,10 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "node -e \"console.log('No frontend tests configured yet')\""
+    "typecheck": "tsc --noEmit",
+    "transport:audit": "node scripts/check-mutation-transport.mjs",
+    "test:contracts": "tsc --noEmit -p tsconfig.contract-tests.json",
+    "test": "npm run test:contracts"
   },
   "engines": {
     "node": ">=20 <21"

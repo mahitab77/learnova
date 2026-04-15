@@ -153,4 +153,41 @@ export async function checkDbReadiness() {
   }
 }
 
+/**
+ * Critical schema invariants required by workflow write-path logic.
+ * Ready checks should fail if these constraints are missing.
+ */
+export async function checkCriticalSchemaInvariants() {
+  let connection;
+  try {
+    connection = await pool.getConnection();
+    const [rows] = await connection.query(
+      `
+      SELECT
+        TABLE_NAME,
+        NON_UNIQUE,
+        GROUP_CONCAT(COLUMN_NAME ORDER BY SEQ_IN_INDEX SEPARATOR ',') AS cols
+      FROM information_schema.STATISTICS
+      WHERE TABLE_SCHEMA = DATABASE()
+        AND TABLE_NAME IN ('parent_students', 'student_teacher_selections')
+      GROUP BY TABLE_NAME, INDEX_NAME, NON_UNIQUE
+      `
+    );
+    const signatures = new Set(
+      (rows || []).map(
+        (row) =>
+          `${row.TABLE_NAME}:${row.NON_UNIQUE}:${String(row.cols || "").toLowerCase()}`
+      )
+    );
+    return (
+      signatures.has("parent_students:0:parent_id,student_id") &&
+      signatures.has("student_teacher_selections:0:student_id,subject_id")
+    );
+  } catch {
+    return false;
+  } finally {
+    if (connection) connection.release();
+  }
+}
+
 export default pool;

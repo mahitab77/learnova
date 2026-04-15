@@ -2,13 +2,46 @@
 export const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:5000";
 
 // ---------------------------------------------------------------------------
+// Canonical frontend transport boundary
+// ---------------------------------------------------------------------------
+// Authenticated/state-changing frontend requests must use apiFetch so
+// credentials + CSRF handling stay centralized and consistent.
+//
+// Ad hoc raw mutation fetch() callers outside this module are non-conformant.
+// ---------------------------------------------------------------------------
+//
+// ---------------------------------------------------------------------------
 // CSRF token cache
 // ---------------------------------------------------------------------------
 // Fetched lazily after login, cached in module scope for the browser session.
 // It is cleared on explicit auth boundaries and automatically on auth failures.
 
 const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+const PUBLIC_AUTH_ENTRY_MUTATION_PATHS = new Set([
+  "/auth/login",
+  "/auth/register-student",
+  "/auth/register-teacher",
+  "/auth/register-parent-with-children",
+  "/auth/request-reset",
+  "/auth/verify-reset",
+]);
 let _csrfToken: string | null = null;
+
+function normalizePathname(inputPath: string): string {
+  try {
+    const pathname = new URL(inputPath, API_BASE).pathname;
+    return pathname.endsWith("/") && pathname.length > 1
+      ? pathname.slice(0, -1)
+      : pathname;
+  } catch {
+    return inputPath;
+  }
+}
+
+function isPublicAuthEntryMutation(path: string, method: string): boolean {
+  if (!MUTATING_METHODS.has(method)) return false;
+  return PUBLIC_AUTH_ENTRY_MUTATION_PATHS.has(normalizePathname(path));
+}
 
 async function fetchCsrfToken(): Promise<string | null> {
   try {
@@ -76,7 +109,19 @@ export async function apiFetch<T>(path: string, options: ApiFetchOptions = {}): 
   // Attach CSRF token for all state-mutating methods
   const method = (options.method ?? "GET").toUpperCase();
   if (MUTATING_METHODS.has(method)) {
+    const isPublicEntryMutation = isPublicAuthEntryMutation(path, method);
     const csrf = await getCsrfToken();
+    // Public auth-entry mutations must stay usable pre-login. We still attach
+    // CSRF when available (e.g. existing session) but only fail-closed on
+    // authenticated/operational mutation routes.
+    if (!csrf && !isPublicEntryMutation) {
+      const csrfError: ApiError = {
+        status: 403,
+        code: "CSRF_TOKEN_UNAVAILABLE",
+        message: "CSRF token is required for state-changing requests.",
+      };
+      throw csrfError;
+    }
     if (csrf) headers.set("X-CSRF-Token", csrf);
   }
 

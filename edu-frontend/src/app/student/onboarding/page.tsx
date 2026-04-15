@@ -25,7 +25,9 @@
 
 import React, { Suspense, useCallback, useEffect, useMemo, useState, useRef } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { apiFetch, API_BASE } from "@/src/lib/api";
+import { apiFetch } from "@/src/lib/api";
+import type { SessionMe } from "@/src/services/authService";
+import studentOnboardingService from "@/src/services/studentOnboardingService";
 
 /* =============================================================================
  * Types
@@ -84,14 +86,6 @@ type TeacherDetails = {
   photoUrl: string | null;
   bio: string | null;
   videoClips: TeacherVideoClip[];
-};
-
-// ✅ SESSION: Response type for /auth/me endpoint
-type MePayload = {
-  authenticated: boolean;
-  user: { id: number; role: string } | null;
-  activeStudentId: number | null;
-  meta?: Record<string, unknown>;
 };
 
 /* =============================================================================
@@ -330,164 +324,12 @@ function isRecord(v: unknown): v is Record<string, unknown> {
  */
 function normalizeMeResponse(body: unknown): MePayload | null {
   if (!isRecord(body) || body.success !== true || !isRecord(body.data)) return null;
-  const data = body.data;
+  const data = body.data as SessionMe["data"];
   if (typeof data.authenticated !== "boolean") return null;
-  return data as MePayload;
+  return data;
 }
 
-/**
- * Strict teachers discovery contract:
- * { success: true, data: Teacher[] }
- */
-function normalizeTeachers(body: unknown): OnboardingTeacher[] {
-  if (!isRecord(body) || body.success !== true || !Array.isArray(body.data)) {
-    throw new Error("Invalid teachers discovery response shape.");
-  }
-
-  const normalized: OnboardingTeacher[] = [];
-
-  const normalizeTeacherRow = (row: unknown): OnboardingTeacher | null => {
-    if (!row || typeof row !== "object") return null;
-    const r = row as { id?: number | string; _id?: number | string; name?: unknown; full_name?: unknown; rating_avg?: unknown; rating_count?: unknown };
-
-    const idSource = r._id ?? r.id;
-    if (idSource === undefined || idSource === null) return null;
-
-    const name =
-      (typeof r.name === "string" && r.name.trim()) ||
-      (typeof r.full_name === "string" && r.full_name.trim()) ||
-      "";
-
-    if (!name) return null;
-
-    const ratingAvg =
-      r.rating_avg !== null && r.rating_avg !== undefined && !isNaN(Number(r.rating_avg))
-        ? Number(r.rating_avg)
-        : null;
-    const ratingCount = Number(r.rating_count || 0);
-
-    return { id: String(idSource), name, ratingAvg, ratingCount };
-  };
-
-  for (const item of body.data) {
-    const t = normalizeTeacherRow(item);
-    if (t) normalized.push(t);
-  }
-
-  return normalized;
-}
-
-/**
- * Convert relative media paths to full URLs.
- * Examples:
- * - "/uploads/teacher-videos/abc.mp4" -> "<base>/uploads/teacher-videos/abc.mp4"
- */
-function resolveMediaUrl(rawUrl: string | null): string | null {
-  if (!rawUrl) return null;
-  const url = rawUrl.trim();
-  if (!url) return null;
-
-  if (url.startsWith("http://") || url.startsWith("https://")) return url;
-
-  // API_BASE is usually ".../api"
-  const base = API_BASE.replace(/\/+$/, "");
-  const baseNoApi = base.replace(/\/api\/?$/i, "");
-
-  if (url.startsWith("/")) return `${baseNoApi}${url}`;
-  return `${baseNoApi}/${url}`;
-}
-
-function normalizeTeacherDetails(body: unknown, fallbackId: string): TeacherDetails | null {
-  if (!isRecord(body) || body.success !== true || !isRecord(body.data)) return null;
-  const raw = body.data;
-
-  const r = raw as {
-    id?: number | string;
-    _id?: number | string;
-    teacherId?: number | string;
-    name?: unknown;
-    full_name?: unknown;
-    photoUrl?: unknown;
-    photo_url?: unknown;
-    avatarUrl?: unknown;
-    bio?: unknown;
-    bio_short?: unknown;
-    bioShort?: unknown;
-    primaryVideoUrl?: unknown;
-    primary_video_url?: unknown;
-    videos?: unknown;
-    videoClips?: unknown;
-    clips?: unknown;
-  };
-
-  const idSource = r._id ?? r.id ?? r.teacherId ?? fallbackId;
-  const id = String(idSource);
-
-  const name =
-    (typeof r.name === "string" && r.name.trim()) ||
-    (typeof r.full_name === "string" && r.full_name.trim()) ||
-    "";
-  if (!name) return null;
-
-  const photoUrl =
-    (typeof r.photoUrl === "string" && r.photoUrl.trim()) ||
-    (typeof r.photo_url === "string" && r.photo_url.trim()) ||
-    (typeof r.avatarUrl === "string" && r.avatarUrl.trim()) ||
-    null;
-
-  const bio =
-    (typeof r.bio === "string" && r.bio.trim()) ||
-    (typeof r.bioShort === "string" && r.bioShort.trim()) ||
-    (typeof r.bio_short === "string" && r.bio_short.trim()) ||
-    null;
-
-  const clips: TeacherVideoClip[] = [];
-
-  const pushClip = (title: string, url: string) => {
-    const u = resolveMediaUrl(url);
-    if (!u) return;
-    clips.push({ title: title.trim() || "Video", url: u });
-  };
-
-  const primary =
-    (typeof r.primaryVideoUrl === "string" && r.primaryVideoUrl.trim()) ||
-    (typeof r.primary_video_url === "string" && r.primary_video_url.trim()) ||
-    null;
-  if (primary) pushClip("Primary clip", primary);
-
-  const listSource = r.videoClips ?? r.videos ?? r.clips;
-  if (Array.isArray(listSource)) {
-    for (const item of listSource) {
-      if (!item || typeof item !== "object") continue;
-      const it = item as { title?: unknown; name?: unknown; url?: unknown; videoUrl?: unknown };
-      const title =
-        (typeof it.title === "string" && it.title.trim()) ||
-        (typeof it.name === "string" && it.name.trim()) ||
-        "";
-      const url =
-        (typeof it.url === "string" && it.url.trim()) ||
-        (typeof it.videoUrl === "string" && it.videoUrl.trim()) ||
-        "";
-      if (url) pushClip(title || "Video", url);
-    }
-  }
-
-  // de-dupe by URL
-  const seen = new Set<string>();
-  const videoClips = clips.filter((c) => {
-    if (seen.has(c.url)) return false;
-    seen.add(c.url);
-    return true;
-  });
-
-  return {
-    id,
-    name,
-    photoUrl: resolveMediaUrl(photoUrl),
-    bio,
-    videoClips,
-  };
-}
+type MePayload = SessionMe["data"];
 
 /* =============================================================================
  * Page component
@@ -971,27 +813,9 @@ function StudentOnboardingContent() {
         setLoadingTeachers(true);
         setTeacherError(null);
 
-        const body: unknown = await apiFetch(
-          `${API_BASE}/student/teachers?subjectId=${encodeURIComponent(selectedSubjectId)}`,
-          {
-            method: "GET",
-            credentials: "include", // ✅ Session cookies
-            signal: controller.signal,
-            headers: {
-              "Content-Type": "application/json",
-              // ❌ REMOVED: "x-user-id": String(userId),
-            },
-          }
+        const list = await studentOnboardingService.listTeachersForSubject(
+          selectedSubjectId
         );
-
-        /* shared apiFetch already throws on non-OK responses.
-          const fallback =
-            lang === "ar"
-              ? "تعذر تحميل قائمة المعلمين لهذه المادة."
-              : "Failed to load teachers for this subject.";
-        */
-
-        const list = normalizeTeachers(body);
         setTeachers(list);
 
         // if previously selected teacher no longer exists, clear it
@@ -1074,25 +898,10 @@ function StudentOnboardingContent() {
         setDetailsLoading(true);
         setDetailsError(null);
 
-        // ✅ Include subjectId as optional query param (helps backend choose relevant clips)
-        const url = `${API_BASE}/student/teachers/${encodeURIComponent(teacherId)}${
-          selectedSubjectId ? `?subjectId=${encodeURIComponent(selectedSubjectId)}` : ""
-        }`;
-
-        // ✅ SESSION: Removed x-user-id header
-        const body: unknown = await apiFetch(url, {
-          method: "GET",
-          credentials: "include", // ✅ Session cookies
-          signal: controller.signal,
-          headers: {
-            "Content-Type": "application/json",
-            // ❌ REMOVED: "x-user-id": String(userId),
-          },
-        });
-
-        /* shared apiFetch already throws on non-OK responses. */
-
-        const normalized = normalizeTeacherDetails(body, teacherId);
+        const normalized = await studentOnboardingService.getTeacherDetails(
+          teacherId,
+          selectedSubjectId || undefined
+        );
 
         if (!normalized) throw new Error(texts[lang].failedTeacherDetails);
 

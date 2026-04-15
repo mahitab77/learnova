@@ -4,6 +4,8 @@
 // ----------------------------------------------------------------------------
 // Mirrors the backend contract in src/routes/payment.routes.js.
 // Uses the shared apiFetch helper (credentials: "include" + CSRF token).
+// Current posture: offline/manual payment coordination. This service reads and
+// manages payment records/status; it does not run a live gateway checkout flow.
 // ============================================================================
 
 import { apiFetch, API_BASE } from "@/src/lib/api";
@@ -127,6 +129,8 @@ export const paymentService = {
 
   // -------------------------------------------------------------------------
   // POST /payment/initiate
+  // Creates a backend payment record using server-derived pricing.
+  // If online gateway is not enabled, backend returns PAYMENT_NOT_CONFIGURED.
   // -------------------------------------------------------------------------
   initiate(input: InitiatePaymentInput) {
     return call<{ paymentId: number; status: PaymentStatus }>(() =>

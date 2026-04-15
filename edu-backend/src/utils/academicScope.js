@@ -368,8 +368,11 @@ export async function validateCatalogAcademicScope(
 export async function normalizeRegistrationAcademicScope(
   scopeInput = {},
   executor = pool,
-  { requireSystemStage = false } = {}
+  { requireSystemStage = false, allowLegacyFallback = false } = {}
 ) {
+  // Canonical registration/write path: callers must provide normalized ids.
+  // Legacy gradeStage/gradeNumber fallback is migration-only and disabled by
+  // default. Controllers/services must opt in explicitly via allowLegacyFallback.
   const hasCanonicalInput =
     hasOwn(scopeInput, "systemId") ||
     hasOwn(scopeInput, "stageId") ||
@@ -428,6 +431,14 @@ export async function normalizeRegistrationAcademicScope(
         gradeNumber: null,
       },
     };
+  }
+
+  if (!allowLegacyFallback) {
+    throw new AcademicScopeValidationError(
+      "Legacy gradeStage/gradeNumber scope is no longer accepted. Provide systemId/stageId/gradeLevelId.",
+      "LEGACY_ACADEMIC_SCOPE_NOT_SUPPORTED",
+      { legacyScope }
+    );
   }
 
   const resolvedLegacy = await resolveCatalogAcademicIdsFromLegacyScope(

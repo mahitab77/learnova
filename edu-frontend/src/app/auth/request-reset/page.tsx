@@ -2,7 +2,7 @@
 "use client";
 
 import React, { useState } from "react";
-import { API_BASE } from "@/src/lib/api";
+import { authService } from "@/src/services/authService";
 
 // backend POST /auth/request-reset
 // body: { email }
@@ -39,29 +39,9 @@ export default function RequestResetPage() {
     try {
       setLoading(true);
 
-      const res = await fetch(`${API_BASE}/auth/request-reset`, {
-        method: "POST",
-        credentials: "include",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ email: email.trim() }),
-      });
-
-      const data: RequestResetResponse = await res.json().catch(() => {
-        return { success: false, message: "Invalid server response." };
-      });
-
-      if (!res.ok) {
-        const msg =
-          typeof data === "object" &&
-          data !== null &&
-          "message" in data &&
-          typeof (data as { message?: string }).message === "string"
-            ? (data as { message: string }).message
-            : "Request failed.";
-        throw new Error(msg);
-      }
+      const data: RequestResetResponse = await authService.requestPasswordReset(
+        email.trim()
+      );
 
       // Backend returns the same response shape for existing/non-existing emails.
       if (

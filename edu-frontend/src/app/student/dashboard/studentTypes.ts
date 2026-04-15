@@ -70,6 +70,8 @@ export type DashboardStudent = {
   systemId: number | null;
   stageId: number | null;
   gradeLevelId: number | null;
+  // Transitional compatibility only. Never use these for operational decisions.
+  // Remove after backend contracts no longer expose them.
   gradeStage: string | null;
   gradeNumber: number | null;
   gender: "male" | "female" | null;

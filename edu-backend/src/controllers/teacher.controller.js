@@ -26,6 +26,18 @@ import {
   isValidDateTimeStr,
   toSqlDateTime,
 } from "../utils/cairoTime.js";
+import {
+  checkScheduleOverlap,
+  insertNotificationSafely,
+  resolveTeacherContext,
+  validateOfferingForeignKeys,
+} from "../services/teacherWorkflow.service.js";
+import {
+  buildCreateHomeworkPayload,
+  buildCreateQuizPayload,
+  buildUpdateHomeworkPayload,
+  buildUpdateQuizPayload,
+} from "../services/teacherMutations.service.js";
 
 // ----------------------------------------------------------------------------
 // Constants
@@ -64,32 +76,6 @@ const ATTENDANCE_STATUSES = new Set([
 // valid for 'approved'.
 const FUTURE_SESSION_STATUSES = new Set(["scheduled", "approved"]);
 const ATTENDANCE_MUTABLE_SESSION_STATUSES = FUTURE_SESSION_STATUSES;
-
-// ----------------------------------------------------------------------------
-// Whitelist for entityExists to prevent SQL injection
-// ----------------------------------------------------------------------------
-const ALLOWED_TABLES = new Set([
-  "subjects",
-  "educational_systems",
-  "grade_stages",
-  "grade_levels",
-  "users",
-  "teachers",
-  "students",
-  "teacher_schedules",
-  "teacher_schedule_exceptions",
-  "lesson_sessions",
-  "lesson_session_students",
-  "homework_assignments",
-  "homework_submissions",
-  "quiz_assignments",
-  "quiz_submissions",
-  "teacher_subjects",
-  "teacher_grade_levels",
-  "teacher_videos",
-  "teacher_schedule_subjects",
-  "student_teacher_selections",
-]);
 
 // ----------------------------------------------------------------------------
 // Small helpers
@@ -235,45 +221,16 @@ function uniqKeyOffering(o) {
 // Teacher context with SESSION VALIDATION
 // ----------------------------------------------------------------------------
 async function requireTeacherContext(conn, req, res) {
-  const userId = getAuthUserId(req);
-  if (!userId) return { ok: false, response: unauthorized(res) };
-
-  // ✅ CHECK SESSION ROLE FIRST - ensures consistency with session data
-  const sessionRole = req.session?.user?.role;
-  if (sessionRole !== "teacher") {
-    return { ok: false, response: forbidden(res, "Forbidden - session role mismatch") };
+  const context = await resolveTeacherContext(conn, req.session?.user);
+  if (!context.ok) {
+    if (context.status === 401) {
+      unauthorized(res, context.message);
+    } else {
+      forbidden(res, context.message);
+    }
+    return { ok: false };
   }
-
-  const [uRows] = await conn.query(
-    `SELECT id, role, is_active, full_name
-     FROM users
-     WHERE id = ?
-     LIMIT 1`,
-    [userId]
-  );
-
-  const user = uRows?.[0];
-  if (!user) return { ok: false, response: unauthorized(res, "User not found") };
-  if (Number(user.is_active) !== 1) return { ok: false, response: forbidden(res, "User is inactive") };
-  if (user.role !== "teacher") return { ok: false, response: forbidden(res, "User is not a teacher") };
-
-  const [tRows] = await conn.query(
-    `SELECT id, user_id, status, is_active
-     FROM teachers
-     WHERE user_id = ?
-     LIMIT 1`,
-    [userId]
-  );
-
-  const teacher = tRows?.[0];
-  if (!teacher) {
-    return { ok: false, response: forbidden(res, "Teacher profile not found") };
-  }
-
-  if (Number(teacher.is_active) !== 1) return { ok: false, response: forbidden(res, "Teacher profile is inactive") };
-  if (teacher.status === "rejected") return { ok: false, response: forbidden(res, "Teacher profile is rejected") };
-
-  return { ok: true, userId, teacherId: teacher.id, teacherStatus: teacher.status };
+  return context;
 }
 
 /**
@@ -284,119 +241,32 @@ async function requireTeacherContext(conn, req, res) {
  * NOTE: We keep a conservative column-set that works on most schemas.
  */
 async function insertNotificationSafe(conn, { userId, title, body, relatedType, relatedId, extraData }) {
-  const safeRelatedType = typeof relatedType === "string" ? relatedType : "other";
-  const safeExtra = extraData != null ? JSON.stringify(extraData) : JSON.stringify({});
-
-  try {
-    await conn.query(
-      `
-      INSERT INTO notifications
-        (user_id, type, title, body, related_type, related_id, is_read, created_at, extra_data)
-      VALUES
-        (?, 'system', ?, ?, ?, ?, 0, NOW(), ?)
-      `,
-      [userId, title, body, safeRelatedType, relatedId, safeExtra]
-    );
-    return;
-  } catch (err) {
-    // If extra_data column doesn't exist, retry without it
-    if (err && (err.code === "ER_BAD_FIELD_ERROR" || err.errno === 1054)) {
-      await conn.query(
-        `
-        INSERT INTO notifications
-          (user_id, type, title, body, related_type, related_id, is_read, created_at)
-        VALUES
-          (?, 'system', ?, ?, ?, ?, 0, NOW())
-        `,
-        [userId, title, body, safeRelatedType, relatedId]
-      );
-      return;
-    }
-    throw err;
-  }
+  return insertNotificationSafely(conn, {
+    userId,
+    title,
+    body,
+    relatedType,
+    relatedId,
+    extraData,
+  });
 }
 
 // ----------------------------------------------------------------------------
 // Schedule overlap
 // ----------------------------------------------------------------------------
 async function hasScheduleOverlap(conn, teacherId, weekday1to7, startTime, endTime, excludeScheduleId = null) {
-  const params = [teacherId, weekday1to7, endTime, startTime];
-
-  let sql = `
-    SELECT id
-    FROM teacher_schedules
-    WHERE teacher_id = ?
-      AND weekday = ?
-      AND is_active = 1
-      AND start_time < ?
-      AND end_time > ?
-  `;
-
-  if (excludeScheduleId != null) {
-    sql += ` AND id <> ?`;
-    params.push(excludeScheduleId);
-  }
-
-  sql += ` LIMIT 1`;
-
-  const [rows] = await conn.query(sql, params);
-  return rows.length > 0;
-}
-
-// ----------------------------------------------------------------------------
-// FK validation helpers (for schedule offerings) - SECURED
-// ----------------------------------------------------------------------------
-async function entityExists(conn, table, id) {
-  if (!ALLOWED_TABLES.has(table)) {
-    console.warn(`[SECURITY] Blocked entityExists query for non-whitelisted table: ${table}`);
-    return false;
-  }
-  const [rows] = await conn.query(`SELECT id FROM ${table} WHERE id = ? LIMIT 1`, [id]);
-  return rows.length > 0;
-}
-
-async function stageBelongsToSystem(conn, stageId, systemId) {
-  const [rows] = await conn.query(
-    `SELECT id FROM grade_stages WHERE id = ? AND system_id = ? LIMIT 1`,
-    [stageId, systemId]
+  return checkScheduleOverlap(
+    conn,
+    teacherId,
+    weekday1to7,
+    startTime,
+    endTime,
+    excludeScheduleId
   );
-  return rows.length > 0;
-}
-
-async function gradeLevelBelongsToStage(conn, gradeLevelId, stageId) {
-  const [rows] = await conn.query(
-    `SELECT id FROM grade_levels WHERE id = ? AND stage_id = ? LIMIT 1`,
-    [gradeLevelId, stageId]
-  );
-  return rows.length > 0;
 }
 
 async function validateOfferingRowFKs(conn, row) {
-  const { subject_id, system_id, stage_id, grade_level_id } = row;
-
-  if (!(await entityExists(conn, "subjects", subject_id))) {
-    return { ok: false, message: `Invalid subject_id (${subject_id})` };
-  }
-  if (!(await entityExists(conn, "educational_systems", system_id))) {
-    return { ok: false, message: `Invalid system_id (${system_id})` };
-  }
-  if (!(await entityExists(conn, "grade_stages", stage_id))) {
-    return { ok: false, message: `Invalid stage_id (${stage_id})` };
-  }
-  if (!(await stageBelongsToSystem(conn, stage_id, system_id))) {
-    return { ok: false, message: `stage_id (${stage_id}) does not belong to system_id (${system_id})` };
-  }
-
-  if (grade_level_id != null) {
-    if (!(await entityExists(conn, "grade_levels", grade_level_id))) {
-      return { ok: false, message: `Invalid grade_level_id (${grade_level_id})` };
-    }
-    if (!(await gradeLevelBelongsToStage(conn, grade_level_id, stage_id))) {
-      return { ok: false, message: `grade_level_id (${grade_level_id}) does not belong to stage_id (${stage_id})` };
-    }
-  }
-
-  return { ok: true };
+  return validateOfferingForeignKeys(conn, row);
 }
 
 // ============================================================================
@@ -2076,24 +1946,24 @@ export async function createHomework(req, res) {
     const ctx = await requireTeacherContext(conn, req, res);
     if (!ctx.ok) return;
 
-    const subjectId = toInt(req.body?.subject_id);
-    const title = typeof req.body?.title === "string" ? req.body.title.trim() : "";
-    const description = typeof req.body?.description === "string" ? req.body.description.trim() : null;
-    const dueAt = req.body?.due_at;
-    const maxScore = req.body?.max_score == null ? null : toInt(req.body?.max_score);
-    const attachmentsUrl = typeof req.body?.attachments_url === "string" ? req.body.attachments_url.trim() : null;
-    const isActive = toBoolTinyInt(req.body?.is_active) ?? 1;
-
-    if (!subjectId || subjectId <= 0) return badRequest(res, "subject_id is required");
-    if (!title) return badRequest(res, "title is required");
-    if (!dueAt || !isValidDateTimeStr(dueAt)) return badRequest(res, "due_at must be a datetime string");
-    if (maxScore != null && maxScore <= 0) return badRequest(res, "max_score must be positive if provided");
+    const prepared = buildCreateHomeworkPayload(req.body || {});
+    if (!prepared.ok) return badRequest(res, prepared.message);
+    const { payload } = prepared;
 
     const [ins] = await conn.query(
       `INSERT INTO homework_assignments
        (teacher_id, subject_id, title, description, due_at, max_score, attachments_url, is_active)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [ctx.teacherId, subjectId, title, description, toSqlDateTime(dueAt), maxScore, attachmentsUrl, isActive]
+      [
+        ctx.teacherId,
+        payload.subjectId,
+        payload.title,
+        payload.description,
+        payload.dueAtSql,
+        payload.maxScore,
+        payload.attachmentsUrl,
+        payload.isActive,
+      ]
     );
 
     return res.json({ ok: true, message: "Homework created", id: ins.insertId });
@@ -2154,30 +2024,25 @@ export async function updateHomework(req, res) {
     const current = curRows?.[0];
     if (!current) return notFound(res, "Homework not found");
 
-    const subjectId = req.body?.subject_id == null ? current.subject_id : toInt(req.body.subject_id);
-    const title = req.body?.title == null ? current.title : String(req.body.title).trim();
-    const description =
-      req.body?.description === undefined ? current.description : typeof req.body.description === "string" ? req.body.description.trim() : null;
-    const dueAt = req.body?.due_at == null ? current.due_at : req.body.due_at;
-    const maxScore = req.body?.max_score === undefined ? current.max_score : req.body.max_score == null ? null : toInt(req.body.max_score);
-    const attachmentsUrl =
-      req.body?.attachments_url === undefined
-        ? current.attachments_url
-        : typeof req.body.attachments_url === "string"
-        ? req.body.attachments_url.trim()
-        : null;
-    const isActive = req.body?.is_active == null ? current.is_active : toBoolTinyInt(req.body.is_active) ?? current.is_active;
-
-    if (!subjectId || subjectId <= 0) return badRequest(res, "subject_id must be positive");
-    if (!title) return badRequest(res, "title cannot be empty");
-    if (!dueAt || !isValidDateTimeStr(dueAt)) return badRequest(res, "due_at must be a datetime string");
-    if (maxScore != null && maxScore <= 0) return badRequest(res, "max_score must be positive if provided");
+    const prepared = buildUpdateHomeworkPayload(req.body || {}, current);
+    if (!prepared.ok) return badRequest(res, prepared.message);
+    const { payload } = prepared;
 
     await conn.query(
       `UPDATE homework_assignments
        SET subject_id = ?, title = ?, description = ?, due_at = ?, max_score = ?, attachments_url = ?, is_active = ?
        WHERE id = ? AND teacher_id = ?`,
-      [subjectId, title, description, toSqlDateTime(dueAt), maxScore, attachmentsUrl, isActive, homeworkId, ctx.teacherId]
+      [
+        payload.subjectId,
+        payload.title,
+        payload.description,
+        payload.dueAtSql,
+        payload.maxScore,
+        payload.attachmentsUrl,
+        payload.isActive,
+        homeworkId,
+        ctx.teacherId,
+      ]
     );
 
     return res.json({ ok: true, message: "Homework updated" });
@@ -2275,33 +2140,25 @@ export async function createQuiz(req, res) {
     const ctx = await requireTeacherContext(conn, req, res);
     if (!ctx.ok) return;
 
-    const subjectId = toInt(req.body?.subject_id);
-    const title = typeof req.body?.title === "string" ? req.body.title.trim() : "";
-    const description = typeof req.body?.description === "string" ? req.body.description.trim() : null;
-    const availableFrom = req.body?.available_from;
-    const availableUntil = req.body?.available_until;
-    const timeLimitMin = req.body?.time_limit_min == null ? null : toInt(req.body?.time_limit_min);
-    const maxScore = req.body?.max_score == null ? null : toInt(req.body?.max_score);
-    const isActive = toBoolTinyInt(req.body?.is_active) ?? 1;
-
-    if (!subjectId || subjectId <= 0) return badRequest(res, "subject_id is required");
-    if (!title) return badRequest(res, "title is required");
-    if (!availableFrom || !isValidDateTimeStr(availableFrom)) return badRequest(res, "available_from must be a datetime string");
-    if (!availableUntil || !isValidDateTimeStr(availableUntil)) return badRequest(res, "available_until must be a datetime string");
-
-    const fromSql = toSqlDateTime(availableFrom);
-    const untilSql = toSqlDateTime(availableUntil);
-    if (!fromSql || !untilSql) return badRequest(res, "available_from/available_until datetime format invalid");
-    if (fromSql >= untilSql) return badRequest(res, "available_from must be before available_until");
-
-    if (timeLimitMin != null && timeLimitMin <= 0) return badRequest(res, "time_limit_min must be positive if provided");
-    if (maxScore != null && maxScore <= 0) return badRequest(res, "max_score must be positive if provided");
+    const prepared = buildCreateQuizPayload(req.body || {});
+    if (!prepared.ok) return badRequest(res, prepared.message);
+    const { payload } = prepared;
 
     const [ins] = await conn.query(
       `INSERT INTO quiz_assignments
        (teacher_id, subject_id, title, description, available_from, available_until, time_limit_min, max_score, is_active)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [ctx.teacherId, subjectId, title, description, fromSql, untilSql, timeLimitMin, maxScore, isActive]
+      [
+        ctx.teacherId,
+        payload.subjectId,
+        payload.title,
+        payload.description,
+        payload.availableFromSql,
+        payload.availableUntilSql,
+        payload.timeLimitMin,
+        payload.maxScore,
+        payload.isActive,
+      ]
     );
 
     return res.json({ ok: true, message: "Quiz created", id: ins.insertId });
@@ -2362,35 +2219,26 @@ export async function updateQuiz(req, res) {
     const current = curRows?.[0];
     if (!current) return notFound(res, "Quiz not found");
 
-    const subjectId = req.body?.subject_id == null ? current.subject_id : toInt(req.body.subject_id);
-    const title = req.body?.title == null ? current.title : String(req.body.title).trim();
-    const description =
-      req.body?.description === undefined ? current.description : typeof req.body.description === "string" ? req.body.description.trim() : null;
-    const availableFrom = req.body?.available_from == null ? current.available_from : req.body.available_from;
-    const availableUntil = req.body?.available_until == null ? current.available_until : req.body.available_until;
-    const timeLimitMin =
-      req.body?.time_limit_min === undefined ? current.time_limit_min : req.body.time_limit_min == null ? null : toInt(req.body.time_limit_min);
-    const maxScore = req.body?.max_score === undefined ? current.max_score : req.body.max_score == null ? null : toInt(req.body.max_score);
-    const isActive = req.body?.is_active == null ? current.is_active : toBoolTinyInt(req.body.is_active) ?? current.is_active;
-
-    if (!subjectId || subjectId <= 0) return badRequest(res, "subject_id must be positive");
-    if (!title) return badRequest(res, "title cannot be empty");
-    if (!availableFrom || !isValidDateTimeStr(availableFrom)) return badRequest(res, "available_from must be a datetime string");
-    if (!availableUntil || !isValidDateTimeStr(availableUntil)) return badRequest(res, "available_until must be a datetime string");
-
-    const fromSql = toSqlDateTime(availableFrom);
-    const untilSql = toSqlDateTime(availableUntil);
-    if (!fromSql || !untilSql) return badRequest(res, "available_from/available_until datetime format invalid");
-    if (fromSql >= untilSql) return badRequest(res, "available_from must be before available_until");
-
-    if (timeLimitMin != null && timeLimitMin <= 0) return badRequest(res, "time_limit_min must be positive if provided");
-    if (maxScore != null && maxScore <= 0) return badRequest(res, "max_score must be positive if provided");
+    const prepared = buildUpdateQuizPayload(req.body || {}, current);
+    if (!prepared.ok) return badRequest(res, prepared.message);
+    const { payload } = prepared;
 
     await conn.query(
       `UPDATE quiz_assignments
        SET subject_id = ?, title = ?, description = ?, available_from = ?, available_until = ?, time_limit_min = ?, max_score = ?, is_active = ?
        WHERE id = ? AND teacher_id = ?`,
-      [subjectId, title, description, fromSql, untilSql, timeLimitMin, maxScore, isActive, quizId, ctx.teacherId]
+      [
+        payload.subjectId,
+        payload.title,
+        payload.description,
+        payload.availableFromSql,
+        payload.availableUntilSql,
+        payload.timeLimitMin,
+        payload.maxScore,
+        payload.isActive,
+        quizId,
+        ctx.teacherId,
+      ]
     );
 
     return res.json({ ok: true, message: "Quiz updated" });

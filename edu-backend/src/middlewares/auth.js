@@ -10,12 +10,7 @@
 
 import pool from "../db.js";
 import { SESSION_COOKIE_NAME, SESSION_COOKIE_OPTIONS } from "../config/session.js";
-
-const NODE_ENV = process.env.NODE_ENV || "development";
-const isProd = NODE_ENV === "production";
-
-const DEV_HEADER_ENABLED =
-  !isProd && String(process.env.ENABLE_DEV_HEADER_AUTH || "false") === "true";
+import { handleDevHeaderAuth } from "./devHeaderAuth.js";
 
 /**
  * Helper: Clear session and cookie (best-effort)
@@ -179,8 +174,17 @@ export const requireUser = async (req, res, next) => {
       return next();
     }
 
-    // 3) Dev header fallback (explicit opt-in only, never in production)
-    if (!DEV_HEADER_ENABLED) {
+    // 3) Optional dev-only header auth fallback is isolated in a separate module.
+    const handledByDevHeader = await handleDevHeaderAuth(req, res, next, {
+      attachUser,
+      validateUserActive,
+    });
+    if (handledByDevHeader) {
+      return;
+    }
+
+    // 4) No session and no dev header auth path enabled/available.
+    if (!req.session?.user?.id) {
       return res.status(401).json({
         success: false,
         source: "auth.requireUser",
@@ -189,81 +193,6 @@ export const requireUser = async (req, res, next) => {
         description: "Please log in again so a valid session cookie is created.",
       });
     }
-
-    const rawId = req.header("x-user-id");
-    if (!rawId) {
-      return res.status(401).json({
-        success: false,
-        source: "auth.requireUser",
-        code: "AUTH_MISSING",
-        message: "Authentication failed: no active session was found.",
-        description:
-          "Please log in again so a valid session cookie is created. " +
-          "In local DEV only, you may also send an 'x-user-id' header.",
-      });
-    }
-
-    const trimmed = String(rawId).trim();
-    const userId = Number(trimmed);
-
-    if (!trimmed || !Number.isFinite(userId) || userId <= 0) {
-      return res.status(400).json({
-        success: false,
-        source: "auth.requireUser",
-        code: "AUTH_HEADER_INVALID",
-        message: "Invalid 'x-user-id' header value.",
-        description:
-          "The 'x-user-id' header must contain a positive numeric user id (e.g. '13'). " +
-          `Received: '${rawId}'.`,
-      });
-    }
-
-    // Load full user details for dev header mode
-    const [rows] = await pool.query(
-      "SELECT id, full_name, email, role, is_active FROM users WHERE id = ? LIMIT 1",
-      [userId]
-    );
-
-    if (!rows.length) {
-      return res.status(401).json({
-        success: false,
-        source: "auth.requireUser",
-        code: "AUTH_USER_NOT_FOUND",
-        message: "Authentication failed: user not found for the provided dev id.",
-      });
-    }
-
-    const dbUser = rows[0];
-    const userRole = typeof dbUser.role === "string" ? dbUser.role.toLowerCase() : "";
-
-    if (!dbUser.is_active) {
-      return res.status(403).json({
-        success: false,
-        source: "auth.requireUser",
-        code: "AUTH_USER_INACTIVE",
-        message: "This user account is inactive or blocked.",
-      });
-    }
-
-    // ✅ ENHANCED: For teachers in dev mode, also check teachers.is_active
-    if (userRole === "teacher") {
-      const [teacherRows] = await pool.query(
-        "SELECT is_active FROM teachers WHERE user_id = ? LIMIT 1",
-        [userId]
-      );
-
-      if (teacherRows.length && !teacherRows[0].is_active) {
-        return res.status(403).json({
-          success: false,
-          source: "auth.requireUser",
-          code: "AUTH_TEACHER_INACTIVE",
-          message: "Your teacher account is inactive. Please contact support.",
-        });
-      }
-    }
-
-    attachUser(req, dbUser);
-    return next();
   } catch (err) {
     console.error("requireUser middleware error:", {
       message: err?.message,

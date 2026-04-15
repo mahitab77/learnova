@@ -6,7 +6,8 @@
  * ✅ Session cookie only (credentials: "include")
  * ✅ Unified behavior:
  *    - No current teacher  -> assign directly via /parent/teacher-options/select
- *    - Has current teacher -> create change request via /parent/requests
+ *    - Has current teacher -> create change request via /parent/requests API
+ *      then redirect to /parent/dashboard/requests UI route
  *
  * ✅ IMPORTANT FIX (your reported bug):
  *    When "Change Teacher" flow is active, we MUST NOT allow selecting the
@@ -23,6 +24,7 @@
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { apiFetch, type ApiError } from "@/src/lib/api";
+import parentService from "@/src/services/parentService";
 import {
   Users,
   PlayCircle,
@@ -31,24 +33,6 @@ import {
   AlertTriangle,
   RefreshCcw,
 } from "lucide-react";
-
-/* =============================================================================
- * Types — Teacher Options
- * ============================================================================= */
-type TeacherOptionRowApi = {
-  teacher_id: number;
-  teacher_full_name: string;
-  bio?: string | null;
-  photo_url?: string | null;
-  demo_video_url?: string | null;
-  years_experience?: string | number | null;
-  rating?: number | null;
-  rating_count?: number | null;
-};
-
-type TeacherOptionsResponse =
-  | { success: true; data: TeacherOptionRowApi[]; message?: string }
-  | { success: false; data?: never; message?: string };
 
 type TeacherOption = {
   id: number;
@@ -61,18 +45,19 @@ type TeacherOption = {
   ratingCount?: number | null;
 };
 
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === "object" && v !== null;
-}
-
-function normaliseTeacherOptions(data: unknown): TeacherOption[] {
-  if (!isRecord(data) || data.success !== true || !Array.isArray(data.data)) {
-    throw new Error("Invalid teacher-options response shape.");
-  }
-
-  const payload = data as TeacherOptionsResponse;
-
-  return payload.data.map((row: TeacherOptionRowApi) => ({
+function normaliseTeacherOptionsFromService(
+  rows: Array<{
+    teacher_id: number;
+    teacher_full_name: string;
+    bio?: string | null;
+    photo_url?: string | null;
+    demo_video_url?: string | null;
+    years_experience?: string | number | null;
+    rating?: number | null;
+    rating_count?: number | null;
+  }>
+): TeacherOption[] {
+  return rows.map((row) => ({
     id: row.teacher_id,
     fullName: row.teacher_full_name,
     bio: row.bio ?? null,
@@ -89,31 +74,6 @@ function normaliseTeacherOptions(data: unknown): TeacherOption[] {
       typeof row.rating_count === "number" ? row.rating_count : null,
   }));
 }
-
-function readEnvelopeFailureMessage(raw: unknown): string | null {
-  if (isRecord(raw) && raw.success === false && typeof raw.message === "string") {
-    return raw.message;
-  }
-
-  return null;
-}
-
-function normaliseSelections(raw: unknown): ParentSelectionApiRow[] {
-  if (!isRecord(raw) || raw.success !== true || !Array.isArray(raw.data)) {
-    throw new Error("Invalid parent selections response shape.");
-  }
-  return raw.data as ParentSelectionApiRow[];
-}
-
-/* =============================================================================
- * Types — Selections (detect current teacher)
- * ============================================================================= */
-type ParentSelectionApiRow = {
-  id: number;
-  subject_id: number;
-  teacher_id: number | null;
-  teacher_name: string | null;
-};
 
 /* =============================================================================
  * Texts
@@ -241,6 +201,8 @@ function ChooseTeacherPageContent() {
   const langParam = searchParams.get("lang");
   const lang = langParam === "ar" ? "ar" : "en";
   const t = chooseTeacherTexts[lang];
+  const parentRequestsPagePath =
+    lang === "ar" ? "/parent/dashboard/requests?lang=ar" : "/parent/dashboard/requests";
 
   const studentIdRaw = searchParams.get("studentId");
   const subjectIdRaw = searchParams.get("subjectId");
@@ -297,16 +259,12 @@ function ChooseTeacherPageContent() {
         setDetecting(true);
         setDetectError(null);
 
-        const raw: unknown = await apiFetch(
-          `/parent/student/${studentId}/selections`
-        );
-
-        const envelopeError = readEnvelopeFailureMessage(raw);
-        if (envelopeError) {
-          throw new Error(envelopeError);
+        const result = await parentService.getStudentSelectionsAsParent(studentId);
+        if (!result.success || !result.data) {
+          throw new Error(result.message || t.detectError);
         }
 
-        const rows = normaliseSelections(raw);
+        const rows = result.data;
         const row =
           rows.find((r) => Number(r.subject_id) === Number(subjectId)) ?? null;
 
@@ -354,16 +312,15 @@ function ChooseTeacherPageContent() {
         setLoading(true);
         setLoadError(null);
 
-        const raw: unknown = await apiFetch(
-          `/parent/teacher-options?student_id=${encodeURIComponent(String(studentId))}&subject_id=${encodeURIComponent(String(subjectId))}`
-        );
-
-        const envelopeError = readEnvelopeFailureMessage(raw);
-        if (envelopeError) {
-          throw new Error(envelopeError);
+        const result = await parentService.getTeacherOptions({
+          studentId,
+          subjectId,
+        });
+        if (!result.success || !result.data) {
+          throw new Error(result.message || t.loadError);
         }
 
-        const list = normaliseTeacherOptions(raw);
+        const list = normaliseTeacherOptionsFromService(result.data);
         setTeachers(list);
       } catch (err: unknown) {
         const msg = getSaveErrorMessage(err, t.loadError, t.notAuthed);
@@ -463,9 +420,7 @@ function ChooseTeacherPageContent() {
       setSaveSuccess(t.requestSuccess);
 
       setTimeout(() => {
-        router.push(
-          lang === "ar" ? "/parent/requests?lang=ar" : "/parent/requests"
-        );
+        router.push(parentRequestsPagePath);
       }, 700);
     } catch (err: unknown) {
       // Auto-fallback if detection was stale and backend indicates the opposite flow.
@@ -500,9 +455,7 @@ function ChooseTeacherPageContent() {
           });
           setSaveSuccess(t.requestSuccess);
           setTimeout(() => {
-            router.push(
-              lang === "ar" ? "/parent/requests?lang=ar" : "/parent/requests"
-            );
+            router.push(parentRequestsPagePath);
           }, 700);
           return;
         } catch (fallbackErr: unknown) {

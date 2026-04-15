@@ -594,6 +594,7 @@ function TeacherDashboardPageContent() {
                   profileForm={dash.profileForm}
                   onProfileFormChange={dash.setProfileForm}
                   onSaveProfile={dash.saveProfile}
+                  subjects={dash.teacherSubjects}
                   videos={dash.videos}
                   videoForm={dash.videoForm}
                   onVideoFormChange={dash.setVideoForm}
@@ -625,6 +626,7 @@ function TeacherDashboardPageContent() {
         open={dash.homeworkModalOpen}
         lang={lang}
         initial={dash.editHomework}
+        subjects={dash.teacherSubjects}
         onClose={dash.closeHomeworkModal}
         onSave={dash.saveHomework}
       />
@@ -633,6 +635,7 @@ function TeacherDashboardPageContent() {
         open={dash.quizModalOpen}
         lang={lang}
         initial={dash.editQuiz}
+        subjects={dash.teacherSubjects}
         onClose={dash.closeQuizModal}
         onSave={onSaveQuizFromModal}
         onSubmit={onSaveQuizFromModal}

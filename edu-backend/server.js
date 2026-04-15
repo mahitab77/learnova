@@ -2,6 +2,7 @@
 import app from "./src/app.js";
 import { testDbConnection } from "./src/db.js";
 import { closeDbPool } from "./src/db.js";
+import { checkCriticalSchemaInvariants } from "./src/db.js";
 import { validateProductionEnv } from "./src/config/envValidation.js";
 import { logError, logInfo, toStructuredError } from "./src/utils/observability.js";
 
@@ -39,6 +40,12 @@ async function start() {
 
   // optional: test DB before starting
   await testDbConnection();
+  const schemaInvariantsReady = await checkCriticalSchemaInvariants();
+  if (!schemaInvariantsReady) {
+    throw new Error(
+      "Critical schema invariants are missing. Required unique keys include student_teacher_selections(student_id, subject_id) and parent_students(parent_id, student_id)."
+    );
+  }
 
   server = app.listen(PORT, () => {
     logInfo("server.started", {

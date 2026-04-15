@@ -188,6 +188,7 @@ function RegisterStudentPageContent() {
 
     if (!form.systemId) nextErrors.systemId = t.systemRequired;
     if (!form.stageId) nextErrors.stageId = t.stageRequired;
+    if (!form.gradeLevelId) nextErrors.gradeLevelId = t.gradeLevelRequired;
 
     setFieldErrors(nextErrors);
     return Object.keys(nextErrors).length === 0;
@@ -205,7 +206,7 @@ function RegisterStudentPageContent() {
       preferredLang: form.preferredLang,
       systemId: Number(form.systemId),
       stageId: Number(form.stageId),
-      gradeLevelId: form.gradeLevelId ? Number(form.gradeLevelId) : null,
+      gradeLevelId: Number(form.gradeLevelId),
     };
 
     try {
@@ -480,8 +481,8 @@ function RegisterStudentPageContent() {
                 <FormField
                   label={t.gradeLevelLabel}
                   htmlFor="gradeLevelId"
+                  required
                   error={fieldErrors.gradeLevelId}
-                  hint={t.optionalLabel}
                 >
                   <select
                     id="gradeLevelId"

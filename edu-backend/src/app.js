@@ -41,7 +41,7 @@ import metaRoutes from "./routes/meta.routes.js";
 import moderatorRoutes from "./routes/moderator.routes.js";
 import meetingRoutes from "./routes/meeting.routes.js";
 import paymentRoutes from "./routes/payment.routes.js";
-import { checkDbReadiness } from "./db.js";
+import { checkCriticalSchemaInvariants, checkDbReadiness } from "./db.js";
 
 // ✅ Centralized session config (single source of truth)
 import { SESSION_CONFIG } from "./config/session.js";
@@ -185,9 +185,24 @@ app.get("/ready", async (_req, res) => {
     });
   }
 
+  const schemaInvariantsReady = await checkCriticalSchemaInvariants();
+  if (!schemaInvariantsReady) {
+    return res.status(503).json({
+      status: "not_ready",
+      checks: {
+        db: "up",
+        schema_invariants: "missing",
+      },
+      time: new Date().toISOString(),
+    });
+  }
+
   return res.json({
     status: "ready",
-    checks: { db: "up" },
+    checks: {
+      db: "up",
+      schema_invariants: "ok",
+    },
     time: new Date().toISOString(),
   });
 });

@@ -1,19 +1,15 @@
 "use client";
 // src/app/parent/checkout/[sessionId]/page.tsx
 // ============================================================================
-// Booking Confirmation / Checkout Entry Point
+// Session Payment Status Entry Point (manual/offline posture)
 // ----------------------------------------------------------------------------
-// This page is the handoff between session booking and payment:
+// This page is the handoff between session booking and payment status:
 //   1. Checks if a payment already exists for this session.
-//   2. If not, shows a confirmation screen and "Proceed to payment" button.
-//   3. Calls POST /payment/initiate, then shows the resulting payment status.
-//   4. If payment exists, shows current status + optional refund flow.
+//   2. If not, shows the current recovery guidance from backend.
+//   3. If payment exists, shows status + optional refund flow.
 //
-// TODO(gateway): When a real provider is integrated, replace the
-//   "Pay now (stub)" button action with a redirect to the provider's
-//   hosted checkout URL (returned from a new POST /payment/checkout-url
-//   endpoint).  The status poll / webhook will then confirm the payment
-//   and the parent lands back here.
+// NOTE: The current product posture is manual/offline payment coordination.
+// This page intentionally does not perform gateway redirect/capture behavior.
 // ============================================================================
 
 import { Suspense, useEffect, useState } from "react";
@@ -54,7 +50,7 @@ const T = {
     refundPending:      "Your refund request is under review.",
     recoveryLabel:      "What to do next",
     statusPaid:         "Payment confirmed",
-    statusFailed:       "Payment failed — please try again",
+    statusFailed:       "Payment was not confirmed — contact your coordinator",
     statusRefunded:     "Refund processed",
     statusPending:      "Awaiting payment confirmation",
     ratingTitle:        "Rate this lesson",
@@ -84,7 +80,7 @@ const T = {
     refundPending:      "طلب الاسترداد قيد المراجعة.",
     recoveryLabel:      "الإجراء المطلوب",
     statusPaid:         "تم تأكيد الدفع",
-    statusFailed:       "فشلت عملية الدفع — يرجى المحاولة مرة أخرى",
+    statusFailed:       "لم يتم تأكيد الدفع — يرجى التواصل مع المنسق",
     statusRefunded:     "تمت معالجة الاسترداد",
     statusPending:      "في انتظار تأكيد الدفع",
     ratingTitle:        "تقييم هذه الحصة",

@@ -49,7 +49,6 @@ import {
   texts,
   parentRelationships,
   childGenders,
-  egyptianSubjects,
   type LangKey,
   type Subject,
   type GradeCatalog,
@@ -82,6 +81,46 @@ type ChildValidationErrors = {
   password?: string;
   passwordConfirm?: string;
 };
+
+function normalizeSubjectsResponse(raw: unknown): Subject[] {
+  const sourceRows =
+    Array.isArray(raw)
+      ? raw
+      : raw &&
+          typeof raw === "object" &&
+          "data" in raw &&
+          Array.isArray((raw as { data?: unknown }).data)
+        ? ((raw as { data: unknown[] }).data)
+        : [];
+
+  return sourceRows
+    .map((row): Subject | null => {
+      if (!row || typeof row !== "object") return null;
+      const rec = row as Record<string, unknown>;
+
+      const rawId = rec.id;
+      const id =
+        typeof rawId === "number"
+          ? rawId
+          : typeof rawId === "string"
+            ? Number(rawId)
+            : NaN;
+
+      if (!Number.isFinite(id)) return null;
+
+      const nameEn =
+        (rec.name_en as string | undefined) ??
+        (rec.name as string | undefined) ??
+        "";
+      const nameAr =
+        (rec.name_ar as string | undefined) ??
+        (rec.name as string | undefined) ??
+        "";
+
+      return { id, name_en: nameEn, name_ar: nameAr };
+    })
+    .filter((s): s is Subject => s !== null);
+}
 
 /** Shape of each child entry in the registration success response. */
 type RegisteredChildResult = {
@@ -336,119 +375,40 @@ const SubjectsDropdown: React.FC<SubjectsDropdownProps> = ({
           <div className="absolute z-50 mt-1 max-h-60 w-full overflow-auto rounded-xl border-2 border-gray-200 bg-white py-2 shadow-lg">
             {filteredSubjects.length === 0 ? (
               <div className="px-4 py-2 text-sm text-gray-500">
-                {lang === "ar"
-                  ? "لا توجد مواد متاحة لهذه المرحلة"
-                  : "No subjects available for this grade"}
+                {t.noSubjects}
               </div>
             ) : (
               <div className="max-h-60 overflow-y-auto">
-                {/* Core subjects */}
-                {filteredSubjects.some((s) => {
-                  const es = egyptianSubjects.find(
-                    (cfg) => cfg.id === s.id
-                  );
-                  return es?.isCore;
-                }) && (
-                  <div className="border-b border-gray-100 pb-1">
-                    <div className="px-4 py-2">
-                      <span className="text-xs font-semibold uppercase text-gray-500">
-                        {lang === "ar" ? "المواد الأساسية" : "Core Subjects"}
+                {filteredSubjects.map((subject) => {
+                  const isSelected = selectedSubjectIds.includes(subject.id);
+                  const label =
+                    lang === "ar"
+                      ? subject.name_ar || subject.name_en
+                      : subject.name_en || subject.name_ar;
+
+                  return (
+                    <label
+                      key={subject.id}
+                      className="flex cursor-pointer items-center gap-3 px-4 py-2 text-sm transition-colors hover:bg-gray-50"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        onChange={() => onSubjectToggle(subject.id)}
+                        className="h-4 w-4 rounded border-gray-300 text-[#FF8C42] focus:ring-[#FF8C42]"
+                      />
+                      <span
+                        className={
+                          isSelected
+                            ? "font-medium text-gray-900"
+                            : "text-gray-700"
+                        }
+                      >
+                        {label}
                       </span>
-                    </div>
-                    {filteredSubjects.map((subject) => {
-                      const cfg = egyptianSubjects.find(
-                        (es) => es.id === subject.id
-                      );
-                      if (!cfg?.isCore) return null;
-
-                      const isSelected = selectedSubjectIds.includes(
-                        subject.id
-                      );
-                      const label =
-                        lang === "ar"
-                          ? subject.name_ar || subject.name_en
-                          : subject.name_en || subject.name_ar;
-
-                      return (
-                        <label
-                          key={subject.id}
-                          className="flex cursor-pointer items-center gap-3 px-4 py-2 text-sm transition-colors hover:bg-gray-50"
-                        >
-                          <input
-                            type="checkbox"
-                            checked={isSelected}
-                            onChange={() => onSubjectToggle(subject.id)}
-                            className="h-4 w-4 rounded border-gray-300 text-[#FF8C42] focus:ring-[#FF8C42]"
-                          />
-                          <span
-                            className={
-                              isSelected
-                                ? "font-medium text-gray-900"
-                                : "text-gray-700"
-                            }
-                          >
-                            {label}
-                          </span>
-                        </label>
-                      );
-                    })}
-                  </div>
-                )}
-
-                {/* Optional subjects */}
-                {filteredSubjects.some((s) => {
-                  const es = egyptianSubjects.find(
-                    (cfg) => cfg.id === s.id
+                    </label>
                   );
-                  return !es?.isCore;
-                }) && (
-                  <div>
-                    <div className="px-4 py-2">
-                      <span className="text-xs font-semibold uppercase text-gray-500">
-                        {lang === "ar"
-                          ? "المواد الاختيارية"
-                          : "Optional Subjects"}
-                      </span>
-                    </div>
-                    {filteredSubjects.map((subject) => {
-                      const cfg = egyptianSubjects.find(
-                        (es) => es.id === subject.id
-                      );
-                      if (cfg?.isCore) return null;
-
-                      const isSelected = selectedSubjectIds.includes(
-                        subject.id
-                      );
-                      const label =
-                        lang === "ar"
-                          ? subject.name_ar || subject.name_en
-                          : subject.name_en || subject.name_ar;
-
-                      return (
-                        <label
-                          key={subject.id}
-                          className="flex cursor-pointer items-center gap-3 px-4 py-2 text-sm transition-colors hover:bg-gray-50"
-                        >
-                          <input
-                            type="checkbox"
-                            checked={isSelected}
-                            onChange={() => onSubjectToggle(subject.id)}
-                            className="h-4 w-4 rounded border-gray-300 text-[#FF8C42] focus:ring-[#FF8C42]"
-                          />
-                          <span
-                            className={
-                              isSelected
-                                ? "font-medium text-gray-900"
-                                : "text-gray-700"
-                            }
-                          >
-                            {label}
-                          </span>
-                        </label>
-                      );
-                    })}
-                  </div>
-                )}
+                })}
               </div>
             )}
           </div>
@@ -568,65 +528,11 @@ function RegisterParentPageContent() {
     const loadSubjects = async () => {
       try {
         setLoadingSubjects(true);
-
-        // ✅ Use apiFetch for consistent error handling and session compatibility
-        // NOTE: Your backend must expose GET /subjects returning array of subjects
-        const data = await apiFetch<unknown>("/subjects");
-
-        let apiSubjects: Subject[] = [];
-
-        if (Array.isArray(data)) {
-          apiSubjects = data
-            .map((row): Subject | null => {
-              if (!row || typeof row !== "object") return null;
-              const rec = row as Record<string, unknown>;
-
-              const rawId = rec.id;
-              const id =
-                typeof rawId === "number"
-                  ? rawId
-                  : typeof rawId === "string"
-                  ? Number(rawId)
-                  : NaN;
-
-              if (!Number.isFinite(id)) return null;
-
-              const nameEn =
-                (rec.name_en as string | undefined) ??
-                (rec.name as string | undefined) ??
-                "";
-
-              const nameAr =
-                (rec.name_ar as string | undefined) ??
-                (rec.name as string | undefined) ??
-                "";
-
-              return { id, name_en: nameEn, name_ar: nameAr };
-            })
-            .filter((s): s is Subject => s !== null);
-        }
-
-        if (apiSubjects.length > 0) {
-          setSubjects(apiSubjects);
-        } else {
-          // fallback to local configuration
-          setSubjects(
-            egyptianSubjects.map((cfg) => ({
-              id: cfg.id,
-              name_en: cfg.name_en,
-              name_ar: cfg.name_ar,
-            }))
-          );
-        }
+        // Backend /subjects is the single source of truth for subject options.
+        const response = await apiFetch<unknown>("/subjects");
+        setSubjects(normalizeSubjectsResponse(response));
       } catch {
-        // fallback to local configuration
-        setSubjects(
-          egyptianSubjects.map((cfg) => ({
-            id: cfg.id,
-            name_en: cfg.name_en,
-            name_ar: cfg.name_ar,
-          }))
-        );
+        setSubjects([]);
       } finally {
         setLoadingSubjects(false);
       }

@@ -218,6 +218,12 @@ export type SlotOfferingsResponseRow = {
   offering_is_active: number;
 };
 
+export type TeacherSubjectRow = {
+  subject_id: number;
+  name_en: string;
+  name_ar: string;
+};
+
 export type GradeCatalogSystem = {
   id: number;
   name: string;

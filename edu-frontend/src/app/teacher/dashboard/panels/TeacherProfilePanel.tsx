@@ -3,7 +3,12 @@
 
 import { useEffect, useMemo, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
-import type { Lang, TeacherProfile, TeacherVideoRow } from "../teacherDashboardTypes";
+import type {
+  Lang,
+  TeacherProfile,
+  TeacherSubjectRow,
+  TeacherVideoRow,
+} from "../teacherDashboardTypes";
 import { Plus, Trash2, Star, Save, Copy, User2, Pencil, X } from "lucide-react";
 
 export type TeacherProfilePanelProps = {
@@ -17,6 +22,7 @@ export type TeacherProfilePanelProps = {
   >;
   onSaveProfile: () => void | Promise<void>;
 
+  subjects: TeacherSubjectRow[];
   videos: TeacherVideoRow[];
   videoForm: { subject_id: string; video_url: string; make_primary: boolean };
   onVideoFormChange: Dispatch<
@@ -61,6 +67,7 @@ export default function TeacherProfilePanel({
   profileForm,
   onProfileFormChange,
   onSaveProfile,
+  subjects,
   videos,
   videoForm,
   onVideoFormChange,
@@ -370,12 +377,21 @@ export default function TeacherProfilePanel({
 
         <div className="grid gap-3 sm:grid-cols-3">
           <label className="sm:col-span-1">
-            <div className="mb-1 text-xs font-semibold text-slate-700">{ar ? "subject_id" : "subject_id"}</div>
-            <input
+            <div className="mb-1 text-xs font-semibold text-slate-700">{ar ? "المادة" : "Subject"}</div>
+            <select
               value={videoForm.subject_id}
               onChange={(e) => onVideoFormChange((p) => ({ ...p, subject_id: e.target.value }))}
               className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-slate-400"
-            />
+            >
+              <option value="">{ar ? "اختر المادة..." : "Choose subject..."}</option>
+              {subjects.map((subject) => (
+                <option key={subject.subject_id} value={subject.subject_id}>
+                  {ar
+                    ? subject.name_ar || subject.name_en
+                    : subject.name_en || subject.name_ar}
+                </option>
+              ))}
+            </select>
           </label>
 
           <label className="sm:col-span-2">
@@ -420,7 +436,7 @@ export default function TeacherProfilePanel({
                 >
                   <div className="min-w-0">
                     <div className="truncate text-sm font-semibold text-slate-900">
-                      {ar ? v.subject_name_ar : v.subject_name_en} — subject_id: {v.subject_id}
+                      {ar ? v.subject_name_ar : v.subject_name_en}
                     </div>
                     <div className="truncate text-xs text-slate-600">{v.video_url}</div>
                   </div>

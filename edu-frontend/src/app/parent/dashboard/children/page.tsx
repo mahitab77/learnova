@@ -321,9 +321,11 @@ function ParentChildrenPageContent() {
                   <h3 className="text-sm font-semibold text-slate-900">
                     {student.studentName}
                   </h3>
-                  {student.gradeStage && (
+                  {(student.gradeLevelName || student.stageName || student.systemName) && (
                     <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-medium text-emerald-700">
-                      {student.gradeStage} {student.gradeNumber ?? ""}
+                      {[student.systemName, student.stageName, student.gradeLevelName]
+                        .filter(Boolean)
+                        .join(" • ")}
                     </span>
                   )}
                 </div>

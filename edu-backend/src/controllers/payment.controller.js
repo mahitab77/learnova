@@ -323,27 +323,132 @@ export async function initiatePayment(req, res) {
     return forbidden(res, "Only parents can initiate payments.");
   }
 
-  // ── PAYMENT NOT CONFIGURED ─────────────────────────────────────────────────
-  // Payments are intentionally offline/manual until a gateway and authoritative
-  // server-side pricing are configured (SYSTEM_ARCHITECTURE_AUTHORITY §9).
-  // Rejecting here prevents arbitrary client-supplied amount_cents from being
-  // written to the payments table as though they were authoritative.
-  return res.status(503).json({
-    success: false,
-    code:    "PAYMENT_NOT_CONFIGURED",
-    message: "Online payment is not yet configured for this platform. " +
-             "Payment is arranged offline — please contact your coordinator.",
-  });
-  // ── END BLOCK (remove when gateway + server-side pricing are ready) ─────────
-  //
-  // Restoration checklist for gateway wiring:
-  //   1. Remove the early-return block above.
-  //   2. Derive amount_cents server-side from an authoritative source
-  //      (e.g. teacher.hourly_rate, a future session_pricing table, or
-  //      a gateway quote endpoint).  Never accept amount_cents from the client.
-  //   3. Re-enable the session-ownership check, duplicate-payment guard,
-  //      and INSERT / emitBillingEvent below.
-  //   4. Wire confirmPayment / failPayment to the provider's webhook.
+  // Keep initiate gated behind an explicit feature flag. This preserves the
+  // current offline/manual posture while allowing a fully-wired path in
+  // environments where pricing + gateway bootstrap is ready.
+  const paymentGatewayEnabled = String(process.env.PAYMENT_GATEWAY_ENABLED || "").toLowerCase() === "true";
+  if (!paymentGatewayEnabled) {
+    return res.status(503).json({
+      success: false,
+      code:    "PAYMENT_NOT_CONFIGURED",
+      message: "Online payment is not yet configured for this platform. " +
+               "Payment is arranged offline — please contact your coordinator.",
+    });
+  }
+
+  const sessionId = toPositiveInt(req.body?.session_id ?? req.body?.sessionId);
+  if (!sessionId) return badRequest(res, "session_id must be a positive integer.");
+
+  const currencyRaw = String(req.body?.currency || "EGP").trim().toUpperCase();
+  const currency = /^[A-Z]{3}$/.test(currencyRaw) ? currencyRaw : "EGP";
+
+  const conn = await pool.getConnection();
+  let txStarted = false;
+  try {
+    await conn.beginTransaction();
+    txStarted = true;
+
+    // Parent can only initiate for their linked student session; admin can do any.
+    let sessionRow = null;
+    if (user.role === "admin") {
+      const [rows] = await conn.query(
+        `SELECT ls.id, ls.teacher_id, t.hourly_rate
+         FROM lesson_sessions ls
+         LEFT JOIN teachers t ON t.id = ls.teacher_id
+         WHERE ls.id = ?
+         LIMIT 1`,
+        [sessionId]
+      );
+      sessionRow = rows[0] ?? null;
+    } else {
+      const [rows] = await conn.query(
+        `SELECT ls.id, ls.teacher_id, t.hourly_rate
+         FROM lesson_sessions ls
+         LEFT JOIN teachers t  ON t.id = ls.teacher_id
+         JOIN parent_students ps ON ps.student_id = ls.student_id
+         JOIN parents p          ON p.id = ps.parent_id
+         WHERE ls.id = ?
+           AND p.user_id = ?
+         LIMIT 1`,
+        [sessionId, user.id]
+      );
+      sessionRow = rows[0] ?? null;
+    }
+
+    if (!sessionRow) {
+      await conn.rollback();
+      txStarted = false;
+      return notFound(res, "Session not found or access denied.");
+    }
+
+    // Duplicate guard: keep one active payment lifecycle per session.
+    const [existingRows] = await conn.query(
+      `SELECT id, status
+       FROM payments
+       WHERE session_id = ?
+         AND status IN ('pending', 'paid', 'refunded')
+       ORDER BY created_at DESC, id DESC
+       LIMIT 1
+       FOR UPDATE`,
+      [sessionId]
+    );
+    if (existingRows.length) {
+      await conn.rollback();
+      txStarted = false;
+      return badRequest(
+        res,
+        "An active payment already exists for this session.",
+        { code: "PAYMENT_ALREADY_EXISTS", paymentId: existingRows[0].id, status: existingRows[0].status }
+      );
+    }
+
+    const hourlyRate = Number(sessionRow.hourly_rate);
+    if (!Number.isFinite(hourlyRate) || hourlyRate <= 0) {
+      await conn.rollback();
+      txStarted = false;
+      return res.status(503).json({
+        success: false,
+        code: "PAYMENT_PRICING_NOT_CONFIGURED",
+        message:
+          "Payment pricing is not configured for this session yet. Please contact your coordinator.",
+      });
+    }
+    const amountCents = Math.round(hourlyRate * 100);
+
+    const [insertResult] = await conn.query(
+      `INSERT INTO payments (session_id, payer_user_id, amount_cents, currency, status)
+       VALUES (?, ?, ?, ?, 'pending')`,
+      [sessionId, user.id, amountCents, currency]
+    );
+    const paymentId = Number(insertResult.insertId);
+
+    // Emit initiation event so billing_events captures the full lifecycle.
+    await emitBillingEvent(conn, {
+      paymentId,
+      eventType: "payment.initiated",
+      actorUserId: user.id,
+      payload: {
+        session_id: sessionId,
+        amount_cents: amountCents,
+        currency,
+        pricing_source: "teacher.hourly_rate",
+      },
+    });
+
+    await conn.commit();
+    txStarted = false;
+
+    return res.status(201).json({
+      success: true,
+      message: "Payment initiated.",
+      data: { paymentId, sessionId, status: "pending", amount_cents: amountCents, currency },
+    });
+  } catch (err) {
+    if (txStarted) await conn.rollback().catch(() => {});
+    return serverError(res, "initiatePayment", err);
+  } finally {
+    conn.release();
+  }
 }
 
 // ----------------------------------------------------------------------------

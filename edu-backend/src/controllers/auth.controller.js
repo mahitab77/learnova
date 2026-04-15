@@ -16,108 +16,35 @@ import pool from "../db.js";
 import { sendOtpEmail } from "../utils/email.js";
 import {
   AcademicScopeValidationError,
-  normalizeRegistrationAcademicScope,
 } from "../utils/academicScope.js";
 import { hashPassword, verifyPassword } from "../utils/password.js";
-import { normalizeIncomingScheduleRow } from "../utils/scheduleContract.js";
+import {
+  AcademicScopeValidationError as RegistrationScopeError,
+  IdentityRegistrationError,
+  createParentWithChildrenIdentities,
+  createStudentIdentity,
+} from "../services/identityRegistration.service.js";
+import {
+  TeacherRegistrationError,
+  createTeacherIdentityAndProfile,
+  normalizeAndValidateTeacherRegistrationInput,
+} from "../services/teacherRegistration.service.js";
+import {
+  getStudentDirectLoginPolicy,
+  hashOtpCode,
+  normalizeEmail,
+  safeRole,
+  sessionDestroy,
+  sessionSave,
+  setLoginSession,
+  timingSafeEqualStr,
+  validatePassword,
+} from "./helpers/authSession.helpers.js";
 import crypto from "crypto";
 import fs from "fs";
 
 // Import centralized session configuration
 import { SESSION_COOKIE_NAME, SESSION_COOKIE_OPTIONS } from "../config/session.js";
-
-function hashOtpCode(code) {
-  return crypto.createHash("sha256").update(String(code || ""), "utf8").digest("hex");
-}
-
-// ----------------------------------------------------------------------------
-// Helper Functions
-// ----------------------------------------------------------------------------
-function normalizeEmail(email) {
-  return String(email || "").trim().toLowerCase();
-}
-
-function safeRole(role) {
-  return String(role || "").toLowerCase();
-}
-
-function isEnabledFlag(value) {
-  return value === true || Number(value) === 1;
-}
-
-async function getStudentDirectLoginPolicy(userId) {
-  const [rows] = await pool.query(
-    `
-    SELECT
-      s.id AS student_id,
-      COUNT(ps.id) AS parent_link_count,
-      MAX(CASE WHEN ps.has_own_login = 1 THEN 1 ELSE 0 END) AS direct_login_enabled,
-      MAX(CASE WHEN u.email IS NULL THEN 1 ELSE 0 END) AS has_null_email_identity
-    FROM students s
-    INNER JOIN users u ON u.id = s.user_id
-    LEFT JOIN parent_students ps ON ps.student_id = s.id
-    WHERE s.user_id = ?
-    GROUP BY s.id
-    LIMIT 1
-    `,
-    [userId]
-  );
-
-  if (!rows.length) return null;
-
-  return {
-    studentId: rows[0].student_id,
-    parentLinkCount: Number(rows[0].parent_link_count) || 0,
-    directLoginEnabled: isEnabledFlag(rows[0].direct_login_enabled),
-    hasNullEmailIdentity: isEnabledFlag(rows[0].has_null_email_identity),
-  };
-}
-
-/**
- * Promisify express-session callbacks
- */
-function sessionRegenerate(req) {
-  return new Promise((resolve, reject) => {
-    req.session.regenerate((err) => (err ? reject(err) : resolve()));
-  });
-}
-function sessionSave(req) {
-  return new Promise((resolve, reject) => {
-    req.session.save((err) => (err ? reject(err) : resolve()));
-  });
-}
-function sessionDestroy(req) {
-  return new Promise((resolve) => {
-    req.session.destroy(() => resolve());
-  });
-}
-
-/**
- * Centralized helper to set login session.
- * Regenerates session and starts with a clean identity-scoped state.
- */
-async function setLoginSession(req, { id, full_name, email, role, extra = {} }) {
-  if (!req.session) return false;
-  
-  // Prevent session fixation
-  await sessionRegenerate(req);
-
-  // Core user data in session
-  req.session.user = {
-    id,
-    full_name: full_name || "",
-    email: email ?? null,
-    role: safeRole(role),
-  };
-
-  // Fresh metadata per authenticated identity.
-  req.session.meta = { ...extra };
-
-  req.session.authenticatedAt = new Date().toISOString();
-  await sessionSave(req);
-
-  return true;
-}
 
 /**
  * Best-effort file cleanup for uploaded videos
@@ -137,85 +64,6 @@ function cleanupUploadedFiles(files) {
   } catch {
     // ignore
   }
-}
-
-/**
- * Timing-safe string compare (for OTP)
- */
-function timingSafeEqualStr(a, b) {
-  const aa = Buffer.from(String(a || ""), "utf8");
-  const bb = Buffer.from(String(b || ""), "utf8");
-  if (aa.length !== bb.length) return false;
-  return crypto.timingSafeEqual(aa, bb);
-}
-
-/**
- * Basic password policy
- */
-function validatePassword(password) {
-  const p = String(password || "");
-  if (p.length < 8) return "Password must be at least 8 characters.";
-  return null;
-}
-
-/**
- * ✅ FIXED: Convert time string to total seconds for accurate comparison
- * Supports HH:mm and HH:mm:ss formats
- */
-function timeToSeconds(timeStr) {
-  if (!timeStr || typeof timeStr !== 'string') return 0;
-  
-  // Remove any whitespace
-  const cleanTime = timeStr.trim();
-  
-  // Handle HH:mm and HH:mm:ss formats
-  const parts = cleanTime.split(':');
-  if (parts.length < 2 || parts.length > 3) return 0;
-  
-  const hours = parseInt(parts[0], 10) || 0;
-  const minutes = parseInt(parts[1], 10) || 0;
-  const seconds = parts.length === 3 ? (parseInt(parts[2], 10) || 0) : 0;
-  
-  // Validate ranges
-  if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59 || seconds < 0 || seconds > 59) {
-    return 0;
-  }
-  
-  return hours * 3600 + minutes * 60 + seconds;
-}
-
-/**
- * Validate a canonical schedule row before persistence.
- */
-function validateSchedule(schedule, rawSchedule = schedule) {
-  const errors = [];
-
-  if (schedule.weekday == null) {
-    errors.push(`Invalid weekday: ${rawSchedule?.weekday}`);
-  }
-
-  if (!schedule.start_time) {
-    errors.push(`Invalid start_time format: ${rawSchedule?.start_time ?? rawSchedule?.startTime}`);
-  }
-
-  if (!schedule.end_time) {
-    errors.push(`Invalid end_time format: ${rawSchedule?.end_time ?? rawSchedule?.endTime}`);
-  }
-
-  if (schedule.start_time && schedule.end_time) {
-    const startSeconds = timeToSeconds(schedule.start_time);
-    const endSeconds = timeToSeconds(schedule.end_time);
-
-    if (startSeconds >= endSeconds) {
-      errors.push(`end_time (${schedule.end_time}) must be after start_time (${schedule.start_time})`);
-    }
-  }
-
-  if (Number(schedule.is_group) === 1 && (schedule.max_students == null || Number(schedule.max_students) < 2)) {
-    errors.push("Group sessions must have max_students >= 2");
-  }
-
-  return errors.length > 0 ? errors : null;
 }
 
 // ============================================================================
@@ -300,68 +148,22 @@ export const registerStudent = async (req, res) => {
   try {
     conn = await pool.getConnection();
     await conn.beginTransaction();
-
-    const normalizedScope = await normalizeRegistrationAcademicScope(
-      req.body || {},
-      conn,
-      { requireSystemStage: true }
-    );
-
-    const [rows] = await conn.query("SELECT id FROM users WHERE email = ? LIMIT 1", [
-      cleanEmail,
-    ]);
-    if (rows.length > 0) {
-      await conn.rollback();
-      return res.status(409).json({
-        success: false,
-        message: "Email already registered.",
-        code: "EMAIL_ALREADY_EXISTS",
-      });
-    }
-
-    const passwordHash = await hashPassword(password);
-
-    const [userResult] = await conn.query(
-      `
-      INSERT INTO users (full_name, email, password_hash, role, preferred_lang, is_active)
-      VALUES (?, ?, ?, 'student', ?, 1)
-      `,
-      [normalizedFullName, cleanEmail, passwordHash, studentLang]
-    );
-
-    const userId = userResult.insertId;
-
-    const [studentResult] = await conn.query(
-      `
-      INSERT INTO students (
-        user_id,
-        system_id,
-        stage_id,
-        grade_level_id,
-        grade_stage,
-        grade_number,
-        onboarding_completed
-      )
-      VALUES (?, ?, ?, ?, ?, ?, 0)
-      `,
-      [
-        userId,
-        normalizedScope.systemId,
-        normalizedScope.stageId,
-        normalizedScope.gradeLevelId,
-        normalizedScope.legacyScope.gradeStage,
-        normalizedScope.legacyScope.gradeNumber,
-      ]
-    );
-    const studentId = studentResult.insertId;
+    const created = await createStudentIdentity(conn, {
+      fullName: normalizedFullName,
+      email,
+      password,
+      preferredLang,
+      normalizeEmail,
+      scopeInput: req.body || {},
+    });
 
     await conn.commit();
 
     // Auto-login
     const sessionOk = await setLoginSession(req, {
-      id: userId,
+      id: created.userId,
       full_name: normalizedFullName,
-      email: cleanEmail,
+      email: created.cleanEmail,
       role: "student",
     });
 
@@ -369,18 +171,18 @@ export const registerStudent = async (req, res) => {
       success: true,
       message: "Student registered successfully.",
       data: {
-        userId,
-        studentId,
+        userId: created.userId,
+        studentId: created.studentId,
         fullName: normalizedFullName,
-        email: cleanEmail,
+        email: created.cleanEmail,
         role: "student",
-        preferredLang: studentLang,
+        preferredLang: created.studentLang,
         academicScope: {
-          systemId: normalizedScope.systemId,
-          stageId: normalizedScope.stageId,
-          gradeLevelId: normalizedScope.gradeLevelId,
+          systemId: created.normalizedScope.systemId,
+          stageId: created.normalizedScope.stageId,
+          gradeLevelId: created.normalizedScope.gradeLevelId,
         },
-        academicScopeSource: normalizedScope.source,
+        academicScopeSource: created.normalizedScope.source,
       },
       ...(sessionOk ? {} : { warning: "SESSION_NOT_CONFIGURED" }),
     });
@@ -395,12 +197,21 @@ export const registerStudent = async (req, res) => {
       }
     }
 
-    if (err instanceof AcademicScopeValidationError) {
+    if (err instanceof AcademicScopeValidationError || err instanceof RegistrationScopeError) {
       return res.status(err.status || 400).json({
         success: false,
         message: err.message,
         code: err.code,
         ...(process.env.NODE_ENV === "development" && { details: err.details }),
+      });
+    }
+
+    if (err instanceof IdentityRegistrationError) {
+      return res.status(err.status || 400).json({
+        success: false,
+        message: err.message,
+        code: err.code,
+        ...(err.field ? { field: err.field } : {}),
       });
     }
 
@@ -434,136 +245,22 @@ export const registerTeacher = async (req, res) => {
   const uploadedFiles = Array.isArray(req.files) ? req.files : [];
   const uploadedUrls = uploadedFiles.map((f) => `/uploads/teacher-videos/${f.filename}`);
 
-  const {
-    fullName,
-    email,
-    password,
-    preferredLang,
-
-    phone,
-    nationality,
-    dateOfBirth,
-    gender,
-    photoUrl,
-
-    yearsOfExperience,
-    highestQualification,
-    university,
-    specialization,
-    currentOccupation,
-
-    teachingStyle,
-    hourlyRate,
-    teachingPhilosophy,
-    achievements,
-    bio,
-    referencesText,
-
-    educationSystemId,
-    gradeLevelIds,
-    subjectIds,
-    schedules,
-  } = payload || {};
-
-  // Required validation
-  if (!fullName || !email || !password) {
-    cleanupUploadedFiles(uploadedFiles);
-    return res.status(400).json({ success: false, message: "fullName, email and password are required." });
-  }
-  
-  const pwErr = validatePassword(password);
-  if (pwErr) {
-    cleanupUploadedFiles(uploadedFiles);
-    return res.status(400).json({ success: false, message: pwErr });
-  }
-
-  if (!phone || !nationality || !dateOfBirth) {
-    cleanupUploadedFiles(uploadedFiles);
-    return res.status(400).json({
-      success: false,
-      message: "phone, nationality, and dateOfBirth are required.",
+  let normalizedInput;
+  try {
+    normalizedInput = normalizeAndValidateTeacherRegistrationInput(payload, {
+      normalizeEmail,
+      validatePassword,
     });
-  }
-  
-  // Check for null/undefined, not falsy (allows 0 years of experience)
-  if (yearsOfExperience == null || !highestQualification) {
+  } catch (err) {
     cleanupUploadedFiles(uploadedFiles);
-    return res.status(400).json({
-      success: false,
-      message: "yearsOfExperience and highestQualification are required.",
-    });
-  }
-  
-  if (!Array.isArray(subjectIds) || subjectIds.length === 0) {
-    cleanupUploadedFiles(uploadedFiles);
-    return res.status(400).json({ success: false, message: "At least one subjectId is required." });
-  }
-  
-  if (!Array.isArray(gradeLevelIds) || gradeLevelIds.length === 0) {
-    cleanupUploadedFiles(uploadedFiles);
-    return res.status(400).json({ success: false, message: "At least one gradeLevelId is required." });
-  }
-  
-  if (!Array.isArray(schedules) || schedules.length === 0) {
-    cleanupUploadedFiles(uploadedFiles);
-    return res.status(400).json({ success: false, message: "At least one schedule slot is required." });
-  }
-
-  // Normalize
-  const cleanEmail = normalizeEmail(email);
-  const lang = preferredLang === "en" ? "en" : "ar";
-
-  const cleanSubjectIds = subjectIds
-    .map((x) => Number(x))
-    .filter((n) => Number.isFinite(n) && n > 0);
-  
-  const cleanGradeLevelIds = gradeLevelIds
-    .map((x) => Number(x))
-    .filter((n) => Number.isFinite(n) && n > 0);
-
-  // ✅ FIXED: Validate that we still have valid IDs after cleaning
-  if (cleanSubjectIds.length === 0) {
-    cleanupUploadedFiles(uploadedFiles);
-    return res.status(400).json({ 
-      success: false, 
-      message: "No valid subject IDs provided. Please check your subject selections." 
-    });
-  }
-  
-  if (cleanGradeLevelIds.length === 0) {
-    cleanupUploadedFiles(uploadedFiles);
-    return res.status(400).json({ 
-      success: false, 
-      message: "No valid grade level IDs provided. Please check your grade level selections." 
-    });
-  }
-
-  // Validate schedules
-  const scheduleErrors = [];
-  const cleanSchedules = [];
-  
-  for (const s of schedules) {
-    const schedule = normalizeIncomingScheduleRow(s);
-    const errors = validateSchedule(schedule, s);
-    if (errors) {
-      scheduleErrors.push(...errors);
-    } else {
-      cleanSchedules.push(schedule);
+    if (err instanceof TeacherRegistrationError) {
+      return res.status(err.status || 400).json({
+        success: false,
+        message: err.message,
+        ...(Array.isArray(err.errors) ? { errors: err.errors } : {}),
+      });
     }
-  }
-
-  if (scheduleErrors.length > 0) {
-    cleanupUploadedFiles(uploadedFiles);
-    return res.status(400).json({
-      success: false,
-      message: "Schedule validation failed",
-      errors: scheduleErrors,
-    });
-  }
-
-  if (cleanSchedules.length === 0) {
-    cleanupUploadedFiles(uploadedFiles);
-    return res.status(400).json({ success: false, message: "No valid schedules provided." });
+    return res.status(400).json({ success: false, message: "Invalid registration payload." });
   }
 
   let conn;
@@ -572,136 +269,19 @@ export const registerTeacher = async (req, res) => {
     conn = await pool.getConnection();
     await conn.beginTransaction();
 
-    // Unique email check
-    const [existing] = await conn.query("SELECT id FROM users WHERE email = ? LIMIT 1", [
-      cleanEmail,
-    ]);
-    if (existing.length > 0) {
-      await conn.rollback();
-      cleanupUploadedFiles(uploadedFiles);
-      return res.status(409).json({ success: false, message: "Email already registered." });
-    }
-
-    // Teacher approval gating (Option A)
-    const passwordHash = await hashPassword(password);
-    const [userResult] = await conn.query(
-      `
-      INSERT INTO users (full_name, email, password_hash, role, preferred_lang, is_active)
-      VALUES (?, ?, ?, 'teacher', ?, 1)
-      `,
-      [fullName, cleanEmail, passwordHash, lang]
+    const { userId, teacherId } = await createTeacherIdentityAndProfile(
+      conn,
+      normalizedInput,
+      uploadedUrls
     );
-    const userId = userResult.insertId;
-
-    // Create teacher profile with is_active = 1
-    const [teacherResult] = await conn.query(
-      `
-      INSERT INTO teachers (
-        user_id, name, bio_short, gender, photo_url, is_active, status,
-        years_of_experience, highest_qualification, hourly_rate,
-        teaching_philosophy, achievements,
-        phone, nationality, date_of_birth, university, specialization, current_occupation,
-        teaching_style, bio_long, references_text, education_system_id
-      )
-      VALUES (
-        ?, ?, NULL, ?, ?, 1, 'pending_review',
-        ?, ?, ?,
-        ?, ?,
-        ?, ?, ?, ?, ?, ?,
-        ?, ?, ?, ?
-      )
-      `,
-      [
-        userId,
-        fullName,
-        gender || null,
-        photoUrl || null,
-
-        String(yearsOfExperience),
-        String(highestQualification),
-        hourlyRate != null ? String(hourlyRate) : null,
-
-        teachingPhilosophy || null,
-        achievements || null,
-
-        String(phone),
-        String(nationality),
-        dateOfBirth,
-        university || null,
-        specialization || null,
-        currentOccupation || null,
-
-        teachingStyle || null,
-        bio || null,
-        referencesText || null,
-        educationSystemId ? Number(educationSystemId) : null,
-      ]
-    );
-    const teacherId = teacherResult.insertId;
-
-    // teacher_subjects
-    {
-      const values = cleanSubjectIds.map(() => "(?, ?)").join(", ");
-      const params = [];
-      cleanSubjectIds.forEach((sid) => params.push(teacherId, sid));
-      await conn.query(`INSERT INTO teacher_subjects (teacher_id, subject_id) VALUES ${values}`, params);
-    }
-
-    // teacher_grade_levels
-    {
-      const values = cleanGradeLevelIds.map(() => "(?, ?)").join(", ");
-      const params = [];
-      cleanGradeLevelIds.forEach((gid) => params.push(teacherId, gid));
-      await conn.query(
-        `INSERT INTO teacher_grade_levels (teacher_id, grade_level_id) VALUES ${values}`,
-        params
-      );
-    }
-
-    // Teacher schedules require canonical schema including max_students.
-    const values = cleanSchedules.map(() => "(?, ?, ?, ?, ?, ?, ?)").join(", ");
-    const params = [];
-    cleanSchedules.forEach((s) =>
-      params.push(
-        teacherId,
-        s.weekday,
-        s.start_time,
-        s.end_time,
-        s.is_group,
-        s.max_students,
-        s.is_active
-      )
-    );
-
-    await conn.query(
-      `
-      INSERT INTO teacher_schedules (teacher_id, weekday, start_time, end_time, is_group, max_students, is_active)
-      VALUES ${values}
-      `,
-      params
-    );
-
-    // teacher_videos
-    if (uploadedUrls.length > 0) {
-      const values = uploadedUrls.map(() => "(?, NULL, ?, ?)").join(", ");
-      const params = [];
-      uploadedUrls.forEach((url, idx) => params.push(teacherId, url, idx === 0 ? 1 : 0));
-      await conn.query(
-        `
-        INSERT INTO teacher_videos (teacher_id, subject_id, video_url, is_primary)
-        VALUES ${values}
-        `,
-        params
-      );
-    }
 
     await conn.commit();
 
     // Auto-login with teacher metadata
     const sessionOk = await setLoginSession(req, {
       id: userId,
-      full_name: fullName,
-      email: cleanEmail,
+      full_name: normalizedInput.fullName,
+      email: normalizedInput.email,
       role: "teacher",
       extra: {
         teacher: { teacherId, status: "pending_review" },
@@ -714,8 +294,8 @@ export const registerTeacher = async (req, res) => {
       data: { 
         userId, 
         teacherId, 
-        fullName, 
-        email: cleanEmail, 
+        fullName: normalizedInput.fullName, 
+        email: normalizedInput.email, 
         role: "teacher", 
         status: "pending_review" 
       },
@@ -734,6 +314,15 @@ export const registerTeacher = async (req, res) => {
     }
 
     cleanupUploadedFiles(uploadedFiles);
+
+    if (err instanceof TeacherRegistrationError) {
+      return res.status(err.status || 400).json({
+        success: false,
+        message: err.message,
+        code: err.code,
+        ...(Array.isArray(err.errors) ? { errors: err.errors } : {}),
+      });
+    }
 
     if (err?.code === "ER_DUP_ENTRY") {
       return res.status(409).json({
@@ -815,201 +404,20 @@ export const registerParentWithChildren = async (req, res) => {
   try {
     conn = await pool.getConnection();
     await conn.beginTransaction();
-
-    const cleanParentEmail = normalizeEmail(email);
-
-    const [existingParentRows] = await conn.query("SELECT id FROM users WHERE email = ? LIMIT 1", [
-      cleanParentEmail,
-    ]);
-    if (existingParentRows.length > 0) {
-      await conn.rollback();
-      return res.status(409).json({
-        success: false,
-        message:
-          "This parent email is already registered. If you already have an account, please log in instead.",
-        field: "email",
-        code: "PARENT_EMAIL_EXISTS",
-      });
-    }
-
-    const parentPasswordHash = await hashPassword(password);
-    const parentLang = preferredLang === "en" ? "en" : "ar";
-
-    // Parent user
-    const [parentUserResult] = await conn.query(
-      `
-      INSERT INTO users (full_name, email, password_hash, role, preferred_lang, is_active)
-      VALUES (?, ?, ?, 'parent', ?, 1)
-      `,
-      [fullName, cleanParentEmail, parentPasswordHash, parentLang]
-    );
-    const parentUserId = parentUserResult.insertId;
-
-    // Parent profile
-    const [parentRowResult] = await conn.query(
-      `
-      INSERT INTO parents (user_id, phone, notes)
-      VALUES (?, ?, ?)
-      `,
-      [parentUserId, phone || null, notes || null]
-    );
-    const parentId = parentRowResult.insertId;
-
-    const createdChildren = [];
-
-    for (const child of children) {
-      const {
-        fullName: childName,
-        email: childEmail,
-        password: childPassword,
-        relationship,
-        preferredLang: childLang,
-        gender,
-        subjectIds,
-      } = child;
-
-      const normalizedScope = await normalizeRegistrationAcademicScope(
-        child,
-        conn,
-        { requireSystemStage: true }
-      );
-
-      const finalChildLang = childLang === "en" ? "en" : parentLang;
-      const rel = relationship || "mother";
-      const normalizedGender = gender === "male" || gender === "female" ? gender : null;
-
-      const childSubjectIds = Array.isArray(subjectIds)
-        ? subjectIds.map((id) => Number(id)).filter((n) => Number.isFinite(n) && n > 0)
-        : [];
-      const hasOwnLogin = normalizedContactOption === "individual" ? 1 : 0;
-
-      let childUserId = null;
-
-      if (normalizedContactOption === "individual") {
-        const cleanChildEmail = normalizeEmail(childEmail);
-
-        const [existingChildRows] = await conn.query("SELECT id FROM users WHERE email = ? LIMIT 1", [
-          cleanChildEmail,
-        ]);
-        if (existingChildRows.length > 0) {
-          await conn.rollback();
-          return res.status(409).json({
-            success: false,
-            message: `Child email is already registered: ${cleanChildEmail}. Please use a different email or choose 'Use parent contacts' instead.`,
-            field: "childEmail",
-            code: "CHILD_EMAIL_EXISTS",
-          });
-        }
-
-        const childPasswordHash = await hashPassword(childPassword);
-
-        const [childUserResult] = await conn.query(
-          `
-          INSERT INTO users (full_name, email, password_hash, role, preferred_lang, is_active)
-          VALUES (?, ?, ?, 'student', ?, 1)
-          `,
-          [childName, cleanChildEmail, childPasswordHash, finalChildLang]
-        );
-
-        childUserId = childUserResult.insertId;
-      } else {
-        // Store a unique random hash so the child row never inherits the
-        // parent's password hash while direct login remains disabled.
-        const disabledLoginPasswordHash = await hashPassword(crypto.randomBytes(32).toString("hex"));
-
-        const [childUserResult] = await conn.query(
-          `
-          INSERT INTO users (full_name, email, password_hash, role, preferred_lang, is_active)
-          VALUES (?, NULL, ?, 'student', ?, 1)
-          `,
-          [childName, disabledLoginPasswordHash, finalChildLang]
-        );
-        childUserId = childUserResult.insertId;
-      }
-
-      // Invariant: every student row must be backed by a users row.
-      // Both branches above always set childUserId; this assertion makes the
-      // invariant explicit so the code is already compatible with a future
-      // NOT NULL migration on students.user_id.
-      if (!childUserId) {
-        throw new Error(
-          `INTERNAL: childUserId not resolved for child '${childName}' – cannot create student row without a linked user identity.`
-        );
-      }
-
-      // Student profile
-      const [studentResult] = await conn.query(
-        `
-        INSERT INTO students (
-          user_id,
-          system_id,
-          stage_id,
-          grade_level_id,
-          grade_stage,
-          grade_number,
-          gender,
-          onboarding_completed
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, 0)
-        `,
-        [
-          childUserId,
-          normalizedScope.systemId,
-          normalizedScope.stageId,
-          normalizedScope.gradeLevelId,
-          normalizedScope.legacyScope.gradeStage,
-          normalizedScope.legacyScope.gradeNumber,
-          normalizedGender,
-        ]
-      );
-      const studentId = studentResult.insertId;
-
-      // Link
-      await conn.query(
-        `
-        INSERT INTO parent_students (parent_id, student_id, relationship, has_own_login)
-        VALUES (?, ?, ?, ?)
-        `,
-        [parentId, studentId, rel, hasOwnLogin]
-      );
-
-      // Subjects
-      if (childSubjectIds.length > 0) {
-        const valuesSql = childSubjectIds.map(() => "(?, ?)").join(", ");
-        const params = [];
-        childSubjectIds.forEach((sid) => params.push(studentId, sid));
-        await conn.query(
-          `
-          INSERT INTO student_subjects (student_id, subject_id)
-          VALUES ${valuesSql}
-          `,
-          params
-        );
-      }
-
-      createdChildren.push({
-        studentId,
-        studentUserId: childUserId,
-        fullName: childName,
-        email: normalizedContactOption === "individual" ? normalizeEmail(childEmail) : cleanParentEmail,
-        hasOwnLogin: hasOwnLogin === 1,
-        contactType: normalizedContactOption,
-        systemId: normalizedScope.systemId,
-        stageId: normalizedScope.stageId,
-        gradeLevelId: normalizedScope.gradeLevelId,
-        relationship: rel,
-        gender: normalizedGender,
-        subjectIds: childSubjectIds,
-      });
-    }
+    const registration = await createParentWithChildrenIdentities(conn, {
+      parent,
+      children,
+      contactOption: normalizedContactOption,
+      normalizeEmail,
+    });
 
     await conn.commit();
 
     // Auto-login for parent
     const sessionOk = await setLoginSession(req, {
-      id: parentUserId,
+      id: registration.parentUserId,
       full_name: fullName,
-      email: cleanParentEmail,
+      email: registration.cleanParentEmail,
       role: "parent",
     });
 
@@ -1017,16 +425,16 @@ export const registerParentWithChildren = async (req, res) => {
       success: true,
       message: "Parent and children registered successfully.",
       data: {
-        parentUserId,
-        parentId,
+        parentUserId: registration.parentUserId,
+        parentId: registration.parentId,
         parent: {
           fullName,
-          email: cleanParentEmail,
+          email: registration.cleanParentEmail,
           phone: phone || null,
-          preferredLang: parentLang,
+          preferredLang: registration.parentLang,
         },
-        children: createdChildren,
-        contactOption: normalizedContactOption,
+        children: registration.createdChildren,
+        contactOption: registration.normalizedContactOption,
       },
       ...(sessionOk ? {} : { warning: "SESSION_NOT_CONFIGURED" }),
     });
@@ -1045,12 +453,22 @@ export const registerParentWithChildren = async (req, res) => {
     let statusCode = 500;
     let errorCode = "UNKNOWN_ERROR";
 
-    if (err instanceof AcademicScopeValidationError) {
+    if (err instanceof AcademicScopeValidationError || err instanceof RegistrationScopeError) {
       return res.status(err.status || 400).json({
         success: false,
         message: err.message,
         code: err.code,
         ...(process.env.NODE_ENV === "development" && { details: err.details }),
+      });
+    } else if (err instanceof IdentityRegistrationError) {
+      statusCode = err.status || 400;
+      errorCode = err.code || "IDENTITY_REGISTRATION_ERROR";
+      errorMessage = err.message;
+      return res.status(statusCode).json({
+        success: false,
+        message: errorMessage,
+        code: errorCode,
+        ...(err.field ? { field: err.field } : {}),
       });
     } else if (err?.code === "ER_DUP_ENTRY") {
       statusCode = 409;
@@ -1124,7 +542,6 @@ export const login = async (req, res) => {
       if (
         directLoginPolicy &&
         directLoginPolicy.parentLinkCount > 0 &&
-        directLoginPolicy.hasNullEmailIdentity &&
         !directLoginPolicy.directLoginEnabled
       ) {
         return res.status(403).json({
@@ -1292,7 +709,7 @@ export const requestPasswordReset = async (req, res) => {
       issuedOtpId = crypto.randomUUID();
       const otpHash = hashOtpCode(otp);
 
-      // Keep one live reset challenge per email.
+      // Keep one live reset challenge per email (resolved/older rows are replaced).
       await pool.query(`DELETE FROM password_reset_otps WHERE email = ?`, [cleanEmail]);
       await pool.query(
         `
@@ -1388,7 +805,7 @@ export const verifyPasswordReset = async (req, res) => {
       [passwordHash, resetUserId]
     );
 
-    // Invalidate all reset challenges for this email and trim expired rows.
+    // Cleanup policy: remove resolved reset rows for this email and trim expired rows.
     await pool.query(`DELETE FROM password_reset_otps WHERE email = ?`, [cleanEmail]);
     await pool.query(`DELETE FROM password_reset_otps WHERE expires_at <= NOW()`);
     if (req.session?.passwordResetChallenge) {

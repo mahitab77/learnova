@@ -77,6 +77,17 @@ export type RegisterStudentSuccess = {
   };
 };
 
+export type RequestResetResponse = {
+  success: boolean;
+  message?: string;
+};
+
+export type VerifyResetPayload = {
+  email: string;
+  otp: string;
+  newPassword: string;
+};
+
 /* -------------------------------------------------------------------------- */
 /* Narrow helpers (no `any`)                                                  */
 /* -------------------------------------------------------------------------- */
@@ -190,6 +201,9 @@ function resetAuthBoundaryCsrfCaches(): void {
 }
 
 export const authService = {
+  // Public auth-entry mutations (login/register/reset) intentionally rely on
+  // apiFetch route-aware CSRF policy: they remain callable pre-login even when
+  // /auth/csrf-token is not available to unauthenticated sessions.
   /**
    * Strict `/me` call:
    * - Uses apiFetch (may throw if your apiFetch throws on non-2xx)
@@ -284,5 +298,23 @@ async me(): Promise<SessionMe> {
     });
     resetAuthBoundaryCsrfCaches();
     return result;
+  },
+
+  async requestPasswordReset(email: string): Promise<RequestResetResponse> {
+    return apiFetch<RequestResetResponse>("/auth/request-reset", {
+      method: "POST",
+      json: { email: email.trim() },
+    });
+  },
+
+  async verifyPasswordReset(payload: VerifyResetPayload): Promise<RequestResetResponse> {
+    return apiFetch<RequestResetResponse>("/auth/verify-reset", {
+      method: "POST",
+      json: {
+        email: payload.email.trim(),
+        otp: payload.otp.trim(),
+        newPassword: payload.newPassword.trim(),
+      },
+    });
   },
 };

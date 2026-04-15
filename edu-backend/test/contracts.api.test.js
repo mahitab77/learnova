@@ -107,3 +107,147 @@ test("contract: student booking endpoint enforces session-only student access", 
   assert.equal(res.body?.code, "SESSION_REQUIRED");
   assertRequestId(res);
 });
+
+test("contract: parent students payload uses normalized scope fields only", async (t) => {
+  const originalQuery = pool.query.bind(pool);
+  const passwordHash = await hashPassword("StrongPass123");
+
+  pool.query = async (sql, params = []) => {
+    if (sql.includes("FROM users") && sql.includes("WHERE email = ?")) {
+      return [[{
+        id: 901,
+        full_name: "Parent Scope Contract",
+        email: String(params[0] || "").toLowerCase(),
+        password_hash: passwordHash,
+        role: "parent",
+        is_active: 1,
+      }]];
+    }
+    if (sql.includes("SELECT id, is_active FROM users WHERE id = ?")) {
+      return [[{ id: Number(params[0]), is_active: 1 }]];
+    }
+    if (sql.includes("SELECT id, user_id, phone, notes FROM parents WHERE user_id = ?")) {
+      return [[{ id: 77, user_id: Number(params[0]), phone: null, notes: null }]];
+    }
+    if (sql.includes("FROM parent_students ps") && sql.includes("AS link_id")) {
+      return [[{
+        link_id: 8001,
+        student_id: 5001,
+        student_name: "Child Scope Contract",
+        system_id: 2,
+        stage_id: 12,
+        grade_level_id: 120,
+        system_name: "National",
+        stage_name: "Primary",
+        grade_level_name: "Grade 4",
+        relationship: "mother",
+        has_own_login: 1,
+        student_user_id: 7001,
+      }]];
+    }
+    throw new Error(`Unexpected SQL in parent scope contract test: ${sql}`);
+  };
+
+  t.after(() => {
+    pool.query = originalQuery;
+  });
+
+  const agent = request.agent(app);
+  const loginRes = await agent.post("/auth/login").send({
+    email: "parent.scope.contract@example.com",
+    password: "StrongPass123",
+  });
+  assert.equal(loginRes.status, 200);
+
+  const res = await agent.get("/parent/students");
+  assert.equal(res.status, 200);
+  assert.equal(res.body?.success, true);
+  assert.equal(Array.isArray(res.body?.data), true);
+  assert.equal(res.body.data.length, 1);
+
+  const row = res.body.data[0];
+  assert.equal(typeof row.system_id, "number");
+  assert.equal(typeof row.stage_id, "number");
+  assert.equal(typeof row.grade_level_id, "number");
+  assert.equal(typeof row.system_name, "string");
+  assert.equal(typeof row.stage_name, "string");
+  assert.equal(typeof row.grade_level_name, "string");
+  assert.equal("grade_stage" in row, false);
+  assert.equal("grade_number" in row, false);
+  assertRequestId(res);
+});
+
+test("contract: student dashboard payload keeps normalized scope contract", async (t) => {
+  const originalQuery = pool.query.bind(pool);
+  const passwordHash = await hashPassword("StrongPass123");
+
+  pool.query = async (sql, params = []) => {
+    if (sql.includes("FROM users") && sql.includes("WHERE email = ?")) {
+      return [[{
+        id: 1201,
+        full_name: "Student Dashboard Contract",
+        email: String(params[0] || "").toLowerCase(),
+        password_hash: passwordHash,
+        role: "student",
+        is_active: 1,
+      }]];
+    }
+    if (sql.includes("FROM students s") && sql.includes("parent_link_count")) {
+      return [[{
+        student_id: 301,
+        parent_link_count: 0,
+        direct_login_enabled: 0,
+      }]];
+    }
+    if (sql.includes("SELECT id, is_active FROM users WHERE id = ?")) {
+      return [[{ id: Number(params[0]), is_active: 1 }]];
+    }
+    if (sql.includes("SELECT id, full_name, preferred_lang, role, is_active") && sql.includes("FROM users")) {
+      return [[{
+        id: Number(params[0]),
+        full_name: "Student Dashboard Contract",
+        preferred_lang: "en",
+        role: "student",
+        is_active: 1,
+      }]];
+    }
+    if (sql.includes("FROM students") && sql.includes("WHERE user_id = ?")) {
+      return [[{
+        id: 301,
+        user_id: Number(params[0]),
+        system_id: 2,
+        stage_id: 12,
+        grade_level_id: 120,
+        gender: "male",
+        onboarding_completed: 1,
+      }]];
+    }
+    if (sql.trim().toUpperCase().startsWith("SELECT")) {
+      return [[]];
+    }
+    throw new Error(`Unexpected SQL in student dashboard contract test: ${sql}`);
+  };
+
+  t.after(() => {
+    pool.query = originalQuery;
+  });
+
+  const agent = request.agent(app);
+  const loginRes = await agent.post("/auth/login").send({
+    email: "student.dashboard.contract@example.com",
+    password: "StrongPass123",
+  });
+  assert.equal(loginRes.status, 200);
+
+  const res = await agent.get("/student/dashboard");
+  assert.equal(res.status, 200);
+  assert.equal(res.body?.success, true);
+  assert.equal(typeof res.body?.data?.student?.systemId, "number");
+  assert.equal(typeof res.body?.data?.student?.stageId, "number");
+  assert.equal(typeof res.body?.data?.student?.gradeLevelId, "number");
+  assert.equal(res.body?.data?.student?.gradeStage, null);
+  assert.equal(res.body?.data?.student?.gradeNumber, null);
+  assert.equal(Array.isArray(res.body?.data?.subjects), true);
+  assert.equal(Array.isArray(res.body?.data?.upcomingLessons), true);
+  assertRequestId(res);
+});

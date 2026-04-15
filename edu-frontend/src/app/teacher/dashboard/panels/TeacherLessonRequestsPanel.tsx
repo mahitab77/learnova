@@ -149,7 +149,7 @@ export default function TeacherLessonRequestsPanel({
               <div className="flex flex-wrap items-start justify-between gap-2">
                 <div className="min-w-0">
                   <span className="inline-block rounded-full bg-sky-50 px-2.5 py-0.5 text-xs font-semibold text-sky-700">
-                    {subjectName || `Subject #${row.subject_id}`}
+                    {subjectName || lr.subject}
                   </span>
                 </div>
                 <span className="shrink-0 rounded-full bg-amber-50 px-2.5 py-0.5 text-[11px] font-medium text-amber-700">

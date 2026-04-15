@@ -625,14 +625,13 @@ export const teacherDashboardTexts: Record<Lang, TeacherDashboardLanguagePack> =
 
       videos: {
         title: "Teacher Videos",
-        subtitle: "Add/Delete/Set primary (manual subject_id)",
-        subjectId: "Subject ID",
+        subtitle: "Add/Delete/Set primary by subject selection",
+        subjectId: "Subject",
         videoUrl: "Video URL",
         primary: "Primary?",
         addVideo: "Add Video",
         emptyTitle: "No videos",
-        note:
-          "Note: There is no catalog endpoint wired here, so subject_id is entered manually.",
+        note: "Note: Select the subject from your assigned subject catalog.",
       },
     },
 
@@ -681,7 +680,7 @@ export const teacherDashboardTexts: Record<Lang, TeacherDashboardLanguagePack> =
       homeworkModal: {
         newTitle: "New Homework",
         editTitle: "Edit Homework",
-        subjectIdHelp: "Enter subject id",
+        subjectIdHelp: "Select subject",
         dueAtLabel: "Due at (SQL datetime)",
         titleLabel: "Title",
         descriptionLabel: "Description",
@@ -693,7 +692,7 @@ export const teacherDashboardTexts: Record<Lang, TeacherDashboardLanguagePack> =
       quizModal: {
         newTitle: "New Quiz",
         editTitle: "Edit Quiz",
-        subjectIdHelp: "Enter subject id",
+        subjectIdHelp: "Select subject",
         dueAtLabel: "Due at (SQL datetime)",
         titleLabel: "Title",
         descriptionLabel: "Description",
@@ -976,14 +975,13 @@ export const teacherDashboardTexts: Record<Lang, TeacherDashboardLanguagePack> =
 
       videos: {
         title: "فيديوهات المعلم",
-        subtitle: "إضافة/حذف/تعيين أساسي (subject_id يدوي)",
-        subjectId: "Subject ID",
+        subtitle: "إضافة/حذف/تعيين أساسي عبر اختيار المادة",
+        subjectId: "المادة",
         videoUrl: "رابط الفيديو",
         primary: "أساسي؟",
         addVideo: "إضافة فيديو",
         emptyTitle: "لا توجد فيديوهات",
-        note:
-          "ملاحظة: لا توجد API عامة لجلب قائمة المواد هنا، لذلك يتم إدخال subject_id يدوياً.",
+        note: "ملاحظة: اختر المادة من قائمة المواد المرتبطة بحسابك.",
       },
     },
 
@@ -1032,7 +1030,7 @@ export const teacherDashboardTexts: Record<Lang, TeacherDashboardLanguagePack> =
       homeworkModal: {
         newTitle: "واجب جديد",
         editTitle: "تعديل واجب",
-        subjectIdHelp: "أدخل رقم المادة",
+        subjectIdHelp: "اختر المادة",
         dueAtLabel: "تاريخ التسليم (SQL)",
         titleLabel: "العنوان",
         descriptionLabel: "الوصف",
@@ -1044,7 +1042,7 @@ export const teacherDashboardTexts: Record<Lang, TeacherDashboardLanguagePack> =
       quizModal: {
         newTitle: "اختبار جديد",
         editTitle: "تعديل اختبار",
-        subjectIdHelp: "أدخل رقم المادة",
+        subjectIdHelp: "اختر المادة",
         dueAtLabel: "تاريخ التسليم (SQL)",
         titleLabel: "العنوان",
         descriptionLabel: "الوصف",

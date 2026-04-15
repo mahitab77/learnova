@@ -3,7 +3,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { X } from "lucide-react";
-import type { Lang, HomeworkRow } from "../teacherDashboardTypes";
+import type { Lang, HomeworkRow, TeacherSubjectRow } from "../teacherDashboardTypes";
 
 function cx(...parts: Array<string | false | null | undefined>) {
   return parts.filter(Boolean).join(" ");
@@ -13,6 +13,7 @@ export type HomeworkModalProps = {
   open: boolean;
   lang: Lang;
   initial: HomeworkRow | null;
+  subjects: TeacherSubjectRow[];
   onClose: () => void;
   onSave: (payload: {
     subject_id: number;
@@ -25,7 +26,14 @@ export type HomeworkModalProps = {
   }) => void | Promise<void>;
 };
 
-export default function HomeworkModal({ open, lang, initial, onClose, onSave }: HomeworkModalProps) {
+export default function HomeworkModal({
+  open,
+  lang,
+  initial,
+  subjects,
+  onClose,
+  onSave,
+}: HomeworkModalProps) {
   const ar = lang === "ar";
 
   const key = initial?.id ?? "new";
@@ -57,11 +65,17 @@ export default function HomeworkModal({ open, lang, initial, onClose, onSave }: 
     return () => window.removeEventListener("keydown", onKey);
   }, [open, onClose]);
 
-  const ui = useMemo(() => ({
-    title: ar ? (initial ? "تعديل واجب" : "واجب جديد") : (initial ? "Edit Homework" : "New Homework"),
-    close: ar ? "إغلاق" : "Close",
-    save: ar ? "حفظ" : "Save",
-  }), [ar, initial]);
+  const ui = useMemo(
+    () => ({
+      title: ar ? (initial ? "تعديل واجب" : "واجب جديد") : initial ? "Edit Homework" : "New Homework",
+      close: ar ? "إغلاق" : "Close",
+      save: ar ? "حفظ" : "Save",
+      subject: ar ? "المادة" : "Subject",
+      chooseSubject: ar ? "اختر المادة..." : "Choose subject...",
+      dueAt: "due_at",
+    }),
+    [ar, initial]
+  );
 
   if (!open) return null;
 
@@ -91,12 +105,25 @@ export default function HomeworkModal({ open, lang, initial, onClose, onSave }: 
         <div className="max-h-[75vh] overflow-auto p-4">
           <div className="grid gap-3 sm:grid-cols-2">
             <label>
-              <div className="mb-1 text-xs font-semibold text-slate-700">subject_id</div>
-              <input value={subject_id} onChange={(e) => setSubjectId(Number(e.target.value))} className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm" />
+              <div className="mb-1 text-xs font-semibold text-slate-700">{ui.subject}</div>
+              <select
+                value={subject_id > 0 ? String(subject_id) : ""}
+                onChange={(e) => setSubjectId(Number(e.target.value))}
+                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+              >
+                <option value="">{ui.chooseSubject}</option>
+                {subjects.map((subject) => (
+                  <option key={subject.subject_id} value={subject.subject_id}>
+                    {ar
+                      ? subject.name_ar || subject.name_en
+                      : subject.name_en || subject.name_ar}
+                  </option>
+                ))}
+              </select>
             </label>
 
             <label>
-              <div className="mb-1 text-xs font-semibold text-slate-700">due_at</div>
+              <div className="mb-1 text-xs font-semibold text-slate-700">{ui.dueAt}</div>
               <input value={due_at} onChange={(e) => setDueAt(e.target.value)} className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm" />
             </label>
 

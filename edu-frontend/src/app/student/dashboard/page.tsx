@@ -50,10 +50,9 @@ import Image from "next/image";
 
 import { useSearchParams, useRouter } from "next/navigation";
 import {
-  apiFetch as sharedApiFetch,
+  apiFetch,
   clearCsrfToken,
 } from "@/src/lib/api";
-import type { ApiError } from "@/src/lib/api";
 import {
   addCairoDays as sharedAddCairoDays,
   cairoDateKey,
@@ -67,12 +66,17 @@ import {
   startOfCairoWeekMonday as sharedStartOfWeekMonday,
 } from "@/src/lib/cairoTime";
 import { useSession } from "@/src/hooks/useSession";
-import { clearParentCsrfToken } from "@/src/services/parentService";
+import parentService, { clearParentCsrfToken } from "@/src/services/parentService";
+import studentService from "@/src/services/studentService";
 
 import { texts } from "./studentTexts";
 import TeacherRatingModal from "./components/TeacherRatingModal";
+import {
+  buildNormalizedAcademicScopeLabel,
+  normalizeProfileResponse,
+  type GradeCatalog,
+} from "./studentDashboardMappers";
 import type {
-  ApiResponse,
   Lang,
   ActiveTab,
   LoadState,
@@ -97,7 +101,6 @@ import type {
   SlotScope,
   TeacherAvailabilityException,
   SessionRatingData,
-  SaveSessionRatingData,
 } from "./studentTypes";
 
 // =============================================================================
@@ -438,16 +441,7 @@ async function getTeacherAvailability(params: {
   to?: string;
   signal?: AbortSignal;
 }): Promise<AvailabilityResponse> {
-  const qs = new URLSearchParams();
-  qs.set("teacherId", String(params.teacherId));
-  qs.set("subjectId", String(params.subjectId));
-  if (params.from) qs.set("from", params.from);
-  if (params.to) qs.set("to", params.to);
-
-  const data = await apiFetch<AvailabilityResponse>({
-    endpoint: `/student/teacher-availability?${qs.toString()}`,
-    signal: params.signal,
-  });
+  const data = await studentService.getTeacherAvailability(params);
 
   return normalizeAvailabilityResponse(data);
 }
@@ -568,140 +562,6 @@ function buildBookableSlots(
 // Runtime-safe parsing helpers
 // =============================================================================
 
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === "object" && v !== null;
-}
-function asString(v: unknown, fallback = ""): string {
-  return typeof v === "string" ? v : fallback;
-}
-function asNumber(v: unknown, fallback: number | null = null): number | null {
-  return typeof v === "number" && Number.isFinite(v) ? v : fallback;
-}
-function asBool(v: unknown, fallback = false): boolean {
-  return typeof v === "boolean" ? v : fallback;
-}
-function asArray(v: unknown): unknown[] {
-  return Array.isArray(v) ? v : [];
-}
-function isApiError(err: unknown): err is ApiError {
-  return (
-    typeof err === "object" &&
-    err !== null &&
-    "status" in err &&
-    typeof (err as { status?: unknown }).status === "number" &&
-    "message" in err &&
-    typeof (err as { message?: unknown }).message === "string"
-  );
-}
-
-function normalizeProfileResponse(raw: unknown): StudentProfileData {
-  const empty: StudentProfileData = {
-    user: { id: 0, fullName: "", email: "", preferredLang: null },
-    student: {
-      id: 0,
-      systemId: null,
-      stageId: null,
-      gradeLevelId: null,
-      gradeStage: null,
-      gradeNumber: null,
-      gender: null,
-      onboardingCompleted: false,
-    },
-    parents: [],
-  };
-
-  if (!isRecord(raw)) return empty;
-
-  const userRaw = isRecord(raw.user) ? raw.user : null;
-  const studentRaw = isRecord(raw.student) ? raw.student : null;
-  const parentsRaw = asArray(raw.parents).filter(isRecord);
-
-  return {
-    user: {
-      id: asNumber(userRaw?.id, 0) ?? 0,
-      fullName: asString(userRaw?.fullName, ""),
-      email: asString(userRaw?.email, ""),
-      preferredLang:
-        typeof userRaw?.preferredLang === "string"
-          ? userRaw.preferredLang
-          : null,
-    },
-    student: {
-      id: asNumber(studentRaw?.id, 0) ?? 0,
-      systemId: asNumber(studentRaw?.systemId, null),
-      stageId: asNumber(studentRaw?.stageId, null),
-      gradeLevelId: asNumber(studentRaw?.gradeLevelId, null),
-      gradeStage:
-        typeof studentRaw?.gradeStage === "string"
-          ? studentRaw.gradeStage
-          : null,
-      gradeNumber: asNumber(studentRaw?.gradeNumber, null),
-      gender:
-        studentRaw?.gender === "male" || studentRaw?.gender === "female"
-          ? studentRaw.gender
-          : null,
-      onboardingCompleted: asBool(studentRaw?.onboardingCompleted, false),
-    },
-    parents: parentsRaw.map((p) => ({
-      parentId: asNumber(p.parentId, 0) ?? 0,
-      fullName: asString(p.fullName, ""),
-      relationship:
-        p.relationship === "mother" ||
-        p.relationship === "father" ||
-        p.relationship === "guardian"
-          ? p.relationship
-          : "guardian",
-    })),
-  };
-}
-
-// =============================================================================
-// Centralized fetch wrapper
-// =============================================================================
-
-async function apiFetch<T>(args: {
-  endpoint: string;
-  signal?: AbortSignal;
-  method?: "GET" | "POST" | "PATCH" | "DELETE" | "PUT";
-  body?: unknown;
-  headers?: Record<string, string>;
-}): Promise<T> {
-  const { endpoint, signal, method = "GET", body, headers } = args;
-
-  try {
-    const json = await sharedApiFetch<unknown>(endpoint, {
-      method,
-      signal,
-      headers: {
-        ...(method === "POST" || method === "PATCH" || method === "PUT"
-          ? { "Content-Type": "application/json" }
-          : {}),
-        ...(headers ?? {}),
-      },
-      body:
-        method === "POST" || method === "PATCH" || method === "PUT"
-          ? JSON.stringify(body ?? {})
-          : undefined,
-    });
-
-    if (!isRecord(json) || json.success !== true || !("data" in json)) {
-      throw new Error("Invalid API response shape.");
-    }
-
-    const api = json as ApiResponse<unknown>;
-    return api.data as T;
-  } catch (err) {
-    if (isApiError(err) && (err.status === 401 || err.status === 403)) {
-      throw new Error("NOT_AUTHENTICATED");
-    }
-
-    if (isApiError(err)) {
-      throw new Error(err.message);
-    }
-
-    throw err instanceof Error ? err : new Error("Request failed.");
-  }
-}
 
 // =============================================================================
 // Schedule Panel Component
@@ -988,11 +848,10 @@ function StudentDashboardPageContent() {
 
   const onBackToParent = useCallback(async () => {
     try {
-      await apiFetch<unknown>({
-        endpoint: "/parent/switch-back",
-        method: "POST",
-        body: {},
-      });
+      const result = await parentService.switchBackToParent();
+      if (!result.success) {
+        throw new Error(result.message || "Could not switch back to parent.");
+      }
       clearCsrfToken();
       clearParentCsrfToken();
       window.dispatchEvent(new Event("auth:changed"));
@@ -1089,6 +948,7 @@ function StudentDashboardPageContent() {
 
   const [profileData, setProfileData] = useState<StudentProfileData | null>(null);
   const [profileState, setProfileState] = useState<LoadState>({ loading: false, error: null });
+  const [gradeCatalog, setGradeCatalog] = useState<GradeCatalog | null>(null);
 
   const [pendingRequests, setPendingRequests] = useState<PendingLessonRequest[] | null>(null);
   const [lessonReqState, setLessonReqState] = useState<LoadState>({ loading: false, error: null });
@@ -1120,6 +980,25 @@ function StudentDashboardPageContent() {
   const availabilitySubjects = useMemo(() => {
     return subjects ?? overviewData?.subjects ?? [];
   }, [subjects, overviewData]);
+  const normalizedAcademicScopeLabel = useMemo(
+    () =>
+      buildNormalizedAcademicScopeLabel(
+        overviewData,
+        gradeCatalog,
+        lang,
+        t.gradeLabel
+      ),
+    [overviewData, gradeCatalog, lang, t.gradeLabel]
+  );
+  const profileAcademicScopeLabel = useMemo(() => {
+    if (!profileData) return "";
+    return buildNormalizedAcademicScopeLabel(
+      { user: profileData.user, student: profileData.student },
+      gradeCatalog,
+      lang,
+      t.gradeLabel
+    );
+  }, [profileData, gradeCatalog, lang, t.gradeLabel]);
 
   const selectedAvailabilityInfo = useMemo(() => {
     const subj = availabilitySubjects.find(
@@ -1157,12 +1036,7 @@ function StudentDashboardPageContent() {
       try {
         setLessonReqState({ loading: true, error: null });
         const signal = startRequest(`cancelScheduled:${id}`);
-        await apiFetch<unknown>({
-          endpoint: `/student/lessons/sessions/${id}/cancel`,
-          method: "POST",
-          body: {},
-          signal,
-        });
+        await studentService.cancelScheduledSession(id, signal);
         if (!mountedRef.current) return;
         setPendingRequests((prev) => prev ? prev.filter((r) => r.id !== id) : prev);
         setLessonReqState({ loading: false, error: null });
@@ -1230,10 +1104,7 @@ function StudentDashboardPageContent() {
     try {
       setOverviewState({ loading: true, error: null });
       const signal = startRequest("overview");
-      const data = await apiFetch<StudentDashboardData>({
-        endpoint: "/student/dashboard",
-        signal,
-      });
+      const data = await studentService.getDashboard(signal);
       if (!mountedRef.current) return;
       setOverviewData(data);
       setOverviewState({ loading: false, error: null });
@@ -1255,15 +1126,28 @@ function StudentDashboardPageContent() {
     }
   }, [overviewState.loading, overviewData, startRequest, t.error, t.notLoggedIn, subjects]);
 
+  const loadGradeCatalog = useCallback(async () => {
+    if (gradeCatalog) return;
+    try {
+      const signal = startRequest("gradeCatalog");
+      const response = await apiFetch<{ success: boolean; data: GradeCatalog }>(
+        "/meta/grade-catalog",
+        { signal }
+      );
+      if (!mountedRef.current || !response?.success || !response.data) return;
+      setGradeCatalog(response.data);
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return;
+      // Non-fatal for dashboard rendering; normalized IDs remain available.
+    }
+  }, [gradeCatalog, startRequest]);
+
   const loadSubjects = useCallback(async (): Promise<DashboardSubject[] | null> => {
     if (subjectsState.loading || subjects) return subjects;
     try {
       setSubjectsState({ loading: true, error: null });
       const signal = startRequest("subjects");
-      const data = await apiFetch<DashboardSubject[]>({
-        endpoint: "/student/subjects",
-        signal,
-      });
+      const data = await studentService.getSubjects(signal);
       if (!mountedRef.current) return null;
       setSubjects(data);
       setSubjectsState({ loading: false, error: null });
@@ -1288,10 +1172,7 @@ function StudentDashboardPageContent() {
       try {
         setScheduleState({ loading: true, error: null });
         const signal = startRequest("schedule");
-        const data = await apiFetch<DashboardLesson[]>({
-          endpoint: "/student/schedule",
-          signal,
-        });
+        const data = await studentService.getSchedule(signal);
         if (!mountedRef.current) return;
         setSchedule(data);
         setScheduleState({ loading: false, error: null });
@@ -1315,10 +1196,7 @@ function StudentDashboardPageContent() {
       if (!opts?.force && pendingRequests) return;
       try {
         const signal = startRequest("pendingLessonRequests");
-        const data = await apiFetch<PendingLessonRequest[]>({
-          endpoint: "/student/lessons/requests/pending",
-          signal,
-        });
+        const data = await studentService.getPendingLessonRequests(signal);
         if (!mountedRef.current) return;
         setPendingRequests(data);
       } catch (err) {
@@ -1363,12 +1241,7 @@ function StudentDashboardPageContent() {
           startsAt: toIsoForBackend(slot.startsAt),
           endsAt: toIsoForBackend(slot.endsAt),
         };
-        await apiFetch<unknown>({
-          endpoint: "/student/lessons/request",
-          method: "POST",
-          body: payload,
-          signal,
-        });
+        await studentService.requestLesson(payload, signal);
         await loadSchedule({ force: true });
         await loadPendingLessonRequests({ force: true });
         if (!mountedRef.current) return;
@@ -1391,10 +1264,7 @@ function StudentDashboardPageContent() {
     try {
       setAttendanceState({ loading: true, error: null });
       const signal = startRequest("attendance");
-      const data = await apiFetch<AttendanceData>({
-        endpoint: "/student/attendance",
-        signal,
-      });
+      const data = await studentService.getAttendance(signal);
       if (!mountedRef.current) return;
       setAttendanceData(data);
       setAttendanceState({ loading: false, error: null });
@@ -1415,10 +1285,7 @@ function StudentDashboardPageContent() {
     try {
       setHomeworkState({ loading: true, error: null });
       const signal = startRequest("homework");
-      const data = await apiFetch<HomeworkItem[]>({
-        endpoint: "/student/homework",
-        signal,
-      });
+      const data = await studentService.getHomework(signal);
       if (!mountedRef.current) return;
       setHomeworkList(data);
       setHomeworkState({ loading: false, error: null });
@@ -1439,10 +1306,7 @@ function StudentDashboardPageContent() {
       try {
         setHomeworkDetailState({ loading: true, error: null });
         const signal = startRequest(`homeworkDetail:${id}`);
-        const data = await apiFetch<HomeworkDetail>({
-          endpoint: `/student/homework/${id}`,
-          signal,
-        });
+        const data = await studentService.getHomeworkById(id, signal);
         if (!mountedRef.current) return;
         setSelectedHomework(data);
         setHomeworkDetailState({ loading: false, error: null });
@@ -1465,10 +1329,7 @@ function StudentDashboardPageContent() {
     try {
       setQuizState({ loading: true, error: null });
       const signal = startRequest("quizzes");
-      const data = await apiFetch<QuizItem[]>({
-        endpoint: "/student/quizzes",
-        signal,
-      });
+      const data = await studentService.getQuizzes(signal);
       if (!mountedRef.current) return;
       setQuizList(data);
       setQuizState({ loading: false, error: null });
@@ -1489,10 +1350,7 @@ function StudentDashboardPageContent() {
       try {
         setQuizDetailState({ loading: true, error: null });
         const signal = startRequest(`quizDetail:${id}`);
-        const data = await apiFetch<QuizDetail>({
-          endpoint: `/student/quizzes/${id}`,
-          signal,
-        });
+        const data = await studentService.getQuizById(id, signal);
         if (!mountedRef.current) return;
         setSelectedQuiz(data);
         setQuizDetailState({ loading: false, error: null });
@@ -1515,10 +1373,7 @@ function StudentDashboardPageContent() {
     try {
       setGradesState({ loading: true, error: null });
       const signal = startRequest("grades");
-      const data = await apiFetch<GradesData>({
-        endpoint: "/student/grades",
-        signal,
-      });
+      const data = await studentService.getGrades(signal);
       if (!mountedRef.current) return;
       setGradesData(data);
       setGradesState({ loading: false, error: null });
@@ -1539,10 +1394,7 @@ function StudentDashboardPageContent() {
     try {
       setAnnouncementsState({ loading: true, error: null });
       const signal = startRequest("announcements");
-      const data = await apiFetch<Announcement[]>({
-        endpoint: "/student/announcements",
-        signal,
-      });
+      const data = await studentService.getAnnouncements(signal);
       if (!mountedRef.current) return;
       setAnnouncements(data);
       setAnnouncementsState({ loading: false, error: null });
@@ -1563,10 +1415,7 @@ function StudentDashboardPageContent() {
     try {
       setNotificationsState({ loading: true, error: null });
       const signal = startRequest("notifications");
-      const data = await apiFetch<NotificationsData>({
-        endpoint: "/student/notifications",
-        signal,
-      });
+      const data = await studentService.getNotifications(signal);
       if (!mountedRef.current) return;
       setNotificationsData(data);
       setNotificationsState({ loading: false, error: null });
@@ -1587,10 +1436,7 @@ function StudentDashboardPageContent() {
     try {
       setProfileState({ loading: true, error: null });
       const signal = startRequest("profile");
-      const raw = await apiFetch<unknown>({
-        endpoint: "/student/profile",
-        signal,
-      });
+      const raw = await studentService.getProfile(signal);
       const safe = normalizeProfileResponse(raw);
       if (!mountedRef.current) return;
       setProfileData(safe);
@@ -1658,12 +1504,7 @@ function StudentDashboardPageContent() {
       try {
         setLessonReqState({ loading: true, error: null });
         const signal = startRequest(`cancelLesson:${id}`);
-        await apiFetch<unknown>({
-          endpoint: `/student/lessons/requests/${id}/cancel`,
-          method: "POST",
-          body: {},
-          signal,
-        });
+        await studentService.cancelLessonRequest(id, signal);
         if (!mountedRef.current) return;
         setPendingRequests((prev) => prev ? prev.filter((r) => r.id !== id) : prev);
         setLessonReqState({ loading: false, error: null });
@@ -1706,10 +1547,7 @@ function StudentDashboardPageContent() {
         setRatingState({ loading: true, error: null });
 
         const signal = startRequest(`lessonRating:${lesson.sessionId}`);
-        const data = await apiFetch<SessionRatingData>({
-          endpoint: `/student/lesson-sessions/${lesson.sessionId}/rating`,
-          signal,
-        });
+        const data = await studentService.getSessionRating(lesson.sessionId, signal);
 
         if (!mountedRef.current) return;
 
@@ -1762,15 +1600,14 @@ function StudentDashboardPageContent() {
         setRatingState((prev) => ({ ...prev, error: null }));
 
         const signal = startRequest(`lessonRatingSave:${ratingTarget.sessionId}`);
-        const data = await apiFetch<SaveSessionRatingData>({
-          endpoint: `/student/lesson-sessions/${ratingTarget.sessionId}/rating`,
-          method: "POST",
-          body: {
+        const data = await studentService.saveSessionRating(
+          ratingTarget.sessionId,
+          {
             stars: payload.stars,
             comment: payload.comment.trim() ? payload.comment.trim() : null,
           },
           signal,
-        });
+        );
 
         if (!mountedRef.current) return;
 
@@ -1818,12 +1655,7 @@ function StudentDashboardPageContent() {
     async (id: number) => {
       try {
         const signal = startRequest(`notifRead:${id}`);
-        await apiFetch<unknown>({
-          endpoint: `/student/notifications/${id}/read`,
-          method: "PATCH",
-          body: {},
-          signal,
-        });
+        await studentService.markNotificationRead(id, signal);
         if (!mountedRef.current) return;
         setNotificationsData((prev) => {
           if (!prev) return prev;
@@ -1840,12 +1672,7 @@ function StudentDashboardPageContent() {
   const markAllNotificationsRead = useCallback(async () => {
     try {
       const signal = startRequest("notifReadAll");
-      await apiFetch<unknown>({
-        endpoint: "/student/notifications/read-all",
-        method: "PATCH",
-        body: {},
-        signal,
-      });
+      await studentService.markAllNotificationsRead(signal);
       if (!mountedRef.current) return;
       setNotificationsData((prev) => {
         if (!prev) return prev;
@@ -1865,9 +1692,10 @@ function StudentDashboardPageContent() {
     if (!authenticated) return;
     const timer = window.setTimeout(() => {
       void loadOverview();
+      void loadGradeCatalog();
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [sessionLoading, authenticated, loadOverview]);
+  }, [sessionLoading, authenticated, loadOverview, loadGradeCatalog]);
 
   // ---------------------------------------------------------------------------
   // Tab switching
@@ -2121,13 +1949,7 @@ function StudentDashboardPageContent() {
             )}
 
             <h1 className="text-xl font-semibold text-slate-900">{t.title}</h1>
-            <p className="text-xs text-slate-600">
-              {overviewData?.student?.gradeStage
-                ? `${t.gradeLabel} ${overviewData.student.gradeStage} ${overviewData.student.gradeNumber ?? ""}`
-                : overviewData?.student?.gradeNumber
-                  ? `${t.gradeLabel} ${overviewData.student.gradeNumber}`
-                  : ""}
-            </p>
+            <p className="text-xs text-slate-600">{normalizedAcademicScopeLabel}</p>
 
             {(notLoggedInError || globalError) && (
               <div className="mt-2 rounded-2xl bg-red-50 p-3 text-xs text-red-800 ring-1 ring-red-200">
@@ -3339,8 +3161,8 @@ function StudentDashboardPageContent() {
                     </div>
                     <div className="text-[11px] text-slate-500">
                       {lang === "ar" ? "الصف:" : "Grade:"}{" "}
-                      {profileData.student.gradeStage ?? ""}{" "}
-                      {profileData.student.gradeNumber ?? ""}
+                      {profileAcademicScopeLabel ||
+                        (lang === "ar" ? "غير محدد" : "Not set")}
                     </div>
                   </div>
 

@@ -41,6 +41,33 @@ if (isProd && (!_rawSecret || _rawSecret === _devFallback)) {
  */
 export const SESSION_COOKIE_NAME = process.env.SESSION_COOKIE_NAME || "edu.sid";
 
+const resolvedSameSite = process.env.SESSION_SAMESITE
+  ? String(process.env.SESSION_SAMESITE).toLowerCase()
+  : isProd
+  ? "none"
+  : "lax";
+
+const resolvedSecure =
+  process.env.SESSION_SECURE != null
+    ? process.env.SESSION_SECURE === "true"
+    : isProd; // in prod you usually want true (HTTPS)
+
+if (!["lax", "strict", "none"].includes(resolvedSameSite)) {
+  console.error(
+    `[session] FATAL: Invalid SESSION_SAMESITE='${resolvedSameSite}'. ` +
+      "Allowed values are: lax | strict | none."
+  );
+  process.exit(1);
+}
+
+if (resolvedSameSite === "none" && !resolvedSecure) {
+  console.error(
+    "[session] FATAL: SESSION_SAMESITE='none' requires SESSION_SECURE=true " +
+      "(browser requirement for cross-site cookies)."
+  );
+  process.exit(1);
+}
+
 /**
  * Cookie options for res.clearCookie(name, options).
  * These MUST match cookie settings used by express-session.
@@ -58,16 +85,9 @@ export const SESSION_COOKIE_OPTIONS = {
 
   // If you're serving frontend + backend on different sites and need cookies cross-site:
   // sameSite must be "none" and secure must be true (HTTPS).
-  sameSite: process.env.SESSION_SAMESITE
-    ? process.env.SESSION_SAMESITE // "lax" | "strict" | "none"
-    : isProd
-    ? "lax"
-    : "lax",
+  sameSite: resolvedSameSite,
 
-  secure:
-    process.env.SESSION_SECURE != null
-      ? process.env.SESSION_SECURE === "true"
-      : isProd, // in prod you usually want true (HTTPS)
+  secure: resolvedSecure,
 
   // Optional: set this ONLY when using a real domain
   // Example: ".learnova.com" (leading dot allows subdomains)
